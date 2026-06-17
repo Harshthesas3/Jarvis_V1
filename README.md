@@ -75,18 +75,168 @@ The assistant converts natural language into structured execution plans and vali
 * PSUtil
 * Windows UI Automation
 
+## Installation & Setup
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/Harshthesas3/JARVIS_V1.git
+cd JARVIS_V1
+```
+
+Or download the ZIP directly:
+
+1. Click the green **Code** button on GitHub.
+2. Select **Download ZIP**.
+3. Extract the ZIP file.
+4. Open a terminal inside the extracted folder.
+
+---
+
+### 2. Create a Virtual Environment
+
+```bash
+python -m venv .venv
+```
+
+Activate it:
+
+#### Windows
+
+```bash
+.venv\Scripts\activate
+```
+
+#### Linux / macOS
+
+```bash
+source .venv/bin/activate
+```
+
+---
+
+### 3. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+### 4. Install Ollama
+
+Download Ollama:
+
+https://ollama.com/download
+
+Verify installation:
+
+```bash
+ollama --version
+```
+
+---
+
+### 5. Download a Language Model
+
+Example:
+
+```bash
+ollama pull qwen3:4b
+```
+
+You may substitute another Ollama-compatible model if desired.
+
+---
+
+### 6. Start Ollama
+
+```bash
+ollama serve
+```
+
+---
+
+### 7. Run JARVIS
+
+```bash
+python jarvis_v2.py
+```
+
+(depending on your configured entry point)
+
+---
+
+### 8. Voice Setup
+
+Ensure:
+
+- Microphone access is enabled in Windows.
+- Speech recognition dependencies are installed.
+- Ollama is running before launching JARVIS.
+
+---
+
+### Troubleshooting
+
+#### Ollama Connection Error
+
+Verify:
+
+```bash
+ollama list
+```
+
+returns your installed model.
+
+#### Microphone Not Detected
+
+Check:
+
+```text
+Windows Settings → Privacy & Security → Microphone
+```
+
+and allow desktop apps to access the microphone.
+
+#### Missing Python Packages
+
+Run:
+
+```bash
+pip install -r requirements.txt
+```
+
+again to reinstall dependencies.
+
 ## Project Structure
 
 ```text
-JARVIS
-├── jarvis_v2.py
-├── planner.py
-├── task_executor.py
-├── ui_core.py
+JARVIS_V1
+│
+├── LICENSE
+├── README.md
+├── app_launcher.py
+├── app_profiles.py
+├── TTS.py
+├── calendar_manager.py
+├── clipboard.py
+├── config.py
 ├── context_engine.py
+├── file_management.py
+├── jarvis.py
+├── planner.py
+├── reminder.py
+├── search.py
 ├── session_memory.py
 ├── speech_correction.py
-└── app_profiles/
+├── task_executor.py
+├── ui_core.py
+├── voice_input.py
+├── web_search.py
+├── window_management.py
+├── desktop_search.py
+└── other supporting modules...
 ```
 
 ## Design Goals
