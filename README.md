@@ -116,7 +116,3 @@ This project is intended for educational, research, and productivity purposes. P
 ## Author
 
 T Harshith Krishna Sastry
-
-RV College of Engineering (RVCE)
-
-Electronics and Communication Engineering
