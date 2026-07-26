@@ -188,13 +188,13 @@ def _handle_reminder(task: TaskNode, context: dict) -> str:
     op = (task.params.get("op") or "add").lower()
     if op == "list":
         items = list_reminders()
-        return "No reminders." if not items else "Reminders: " + "; ".join(f"{i+1}. {r['task']}" for i, r in enumerate(items))
+        return "You have no reminders, sir." if not items else "Your reminders, sir: " + "; ".join(f"{i+1}. {r['task']}" for i, r in enumerate(items))
     if op == "clear":
-        return f"Cleared {clear_reminders()} reminders."
+        return f"Cleared {clear_reminders()} reminders, sir."
     if op == "remove":
-        return "Reminder deleted." if remove_reminder(int(task.params.get("index", 0)) - 1) else "Not found."
+        return "Reminder deleted, sir." if remove_reminder(int(task.params.get("index", 0)) - 1) else "Reminder not found, sir."
     r = add_reminder(task.params.get("time", ""), task.params.get("task", ""))
-    return f"Reminder set for {r.get('human_time', '?')}."
+    return f"Reminder set for {r.get('human_time', '?')}, sir."
 
 
 def _handle_clipboard(task: TaskNode, context: dict) -> str:
@@ -202,14 +202,14 @@ def _handle_clipboard(task: TaskNode, context: dict) -> str:
     op = (task.params.get("op") or "read").lower()
     if op == "read":
         t = clipboard_tools.read()
-        return f"Clipboard: {t[:400]}" if t else "Clipboard empty."
+        return f"Clipboard contents, sir: {t[:400]}" if t else "The clipboard is empty, sir."
     if op == "write":
         clipboard_tools.write(task.params.get("text", ""))
-        return "Copied."
+        return "Copied to clipboard, sir."
     if op == "clear":
         clipboard_tools.clear()
-        return "Cleared."
-    return "Done."
+        return "Clipboard cleared, sir."
+    return "Done, sir."
 
 
 def _handle_screenshot(task: TaskNode, context: dict) -> str:
@@ -219,9 +219,9 @@ def _handle_screenshot(task: TaskNode, context: dict) -> str:
         p = f"Screenshots/shot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
         with mss.MSS() as s:
             s.shot(output=p)
-        return f"Screenshot saved."
+        return f"Screenshot captured, sir."
     except Exception as e:
-        return f"Screenshot failed: {e}"
+        return f"Screenshot failed, sir: {e}"
 
 
 def _handle_volume_control(task: TaskNode, context: dict) -> str:
@@ -233,31 +233,31 @@ def _handle_volume_control(task: TaskNode, context: dict) -> str:
         v = AudioUtilities.GetSpeakers().EndpointVolume
         if op == "up":
             v.SetMasterVolumeLevelScalar(min(v.GetMasterVolumeLevelScalar() + 0.1, 1.0), None)
-            return "Volume up."
+            return "Volume increased, sir."
         if op == "down":
             v.SetMasterVolumeLevelScalar(max(v.GetMasterVolumeLevelScalar() - 0.1, 0.0), None)
-            return "Volume down."
+            return "Volume decreased, sir."
         if op == "mute":
-            v.SetMute(1, None); return "Muted."
+            v.SetMute(1, None); return "Muted, sir."
         if op == "unmute":
-            v.SetMute(0, None); return "Unmuted."
+            v.SetMute(0, None); return "Unmuted, sir."
         if op == "set":
             v.SetMasterVolumeLevelScalar(max(0, min(int(task.params.get("level", 50)), 100)) / 100, None)
-            return f"Volume set to {task.params.get('level')}%."
+            return f"Volume set to {task.params.get('level')}%, sir."
     except Exception as exc:
         logger.warning("Volume command failed: %s", exc)
-    return "Volume command failed."
+    return "Volume command failed, sir."
 
 
 def _handle_system_control(task: TaskNode, context: dict) -> str:
     op = (task.params.get("op") or "").lower()
     if "lock" in op:
-        subprocess.run(["rundll32.exe", "user32.dll,LockWorkStation"], capture_output=True, timeout=5); return "Locking."
+        subprocess.run(["rundll32.exe", "user32.dll,LockWorkStation"], capture_output=True, timeout=5); return "Locking the workstation, sir."
     if "shutdown" in op:
-        subprocess.run(["shutdown", "/s", "/t", "5"], capture_output=True, timeout=5); return "Shutting down."
+        subprocess.run(["shutdown", "/s", "/t", "5"], capture_output=True, timeout=5); return "Shutting down in 5 seconds, sir."
     if "restart" in op:
-        subprocess.run(["shutdown", "/r", "/t", "5"], capture_output=True, timeout=5); return "Restarting."
-    return "Unknown."
+        subprocess.run(["shutdown", "/r", "/t", "5"], capture_output=True, timeout=5); return "Restarting in 5 seconds, sir."
+    return "Unknown system command, sir."
 
 
 def _handle_pc_control(task: TaskNode, context: dict) -> str:
@@ -267,12 +267,12 @@ def _handle_pc_control(task: TaskNode, context: dict) -> str:
 def _handle_close_app(task: TaskNode, context: dict) -> str:
     app = re.sub(r'[^a-zA-Z0-9_.-]', '', (task.params.get("app") or "").strip())
     if not app:
-        return "No app."
+        return "No application specified, sir."
     try:
         subprocess.run(["taskkill", "/IM", app + ".exe", "/F"], capture_output=True, text=True, timeout=5)
-        return f"Closed {app}."
+        return f"Closed {app}, sir."
     except Exception as e:
-        return f"Failed: {e}"
+        return f"Failed to close {app}, sir: {e}"
 
 
 def _handle_ai_chat(task: TaskNode, context: dict) -> str:
@@ -284,13 +284,13 @@ def _handle_ai_chat(task: TaskNode, context: dict) -> str:
 def _handle_browser_open(task: TaskNode, context: dict) -> str:
     url = (task.params.get("url") or "").strip()
     if not url:
-        return "No URL."
+        return "No URL provided, sir."
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
     try:
-        webbrowser.open(url); return f"Opening {url}."
+        webbrowser.open(url); return f"Opening {url}, sir."
     except Exception as e:
-        return f"Failed: {e}"
+        return f"Failed to open the browser, sir: {e}"
 
 
 def _handle_browser_search(task: TaskNode, context: dict) -> str:
@@ -298,8 +298,8 @@ def _handle_browser_search(task: TaskNode, context: dict) -> str:
     q = (task.params.get("query") or "").strip()
     if q:
         webbrowser.open(f"https://www.google.com/search?q={urllib.parse.quote(q)}")
-        return f"Searching {q}."
-    return "No query."
+        return f"Searching for {q}, sir."
+    return "No query provided, sir."
 
 
 def _handle_click(task: TaskNode, context: dict) -> str:
@@ -335,48 +335,48 @@ def _handle_scroll(task: TaskNode, context: dict) -> str:
 def _handle_music(task: TaskNode, context: dict) -> str:
     import keyboard
     op = (task.params.get("op") or "").lower()
-    if op in ("play", "pause"): keyboard.send("play/pause media"); return "Toggled."
-    if op in ("next", "skip"): keyboard.send("next track"); return "Skipped."
-    if op == "previous": keyboard.send("previous track"); return "Previous."
-    return "Unknown music command."
+    if op in ("play", "pause"): keyboard.send("play/pause media"); return "Toggled playback, sir."
+    if op in ("next", "skip"): keyboard.send("next track"); return "Skipping to the next track, sir."
+    if op == "previous": keyboard.send("previous track"); return "Going back a track, sir."
+    return "Unknown music command, sir."
 
 
 def _handle_memory_store(task: TaskNode, context: dict) -> str:
     fact = (task.params.get("fact") or "").strip()
     mem = _EXECUTOR_CONTEXT.get("memory")
     if not fact or not mem:
-        return "Memory unavailable."
+        return "Memory is unavailable, sir."
     d = mem.load(); d.setdefault("facts", []).append(fact); mem.save(d)
-    return "Remembered."
+    return "Noted, sir. I'll remember that."
 
 
 def _handle_memory_recall(task: TaskNode, context: dict) -> str:
     mem = _EXECUTOR_CONTEXT.get("memory")
     if not mem:
-        return "Memory unavailable."
+        return "Memory is unavailable, sir."
     facts = mem.load().get("facts", [])
-    return "No facts." if not facts else "Remember: " + "; ".join(facts)
+    return "I have no stored facts, sir." if not facts else "What I remember, sir: " + "; ".join(facts)
 
 
 def _handle_memory_clear(task: TaskNode, context: dict) -> str:
     mem = _EXECUTOR_CONTEXT.get("memory")
     if not mem:
-        return "Memory unavailable."
-    mem.save({"facts": []}); return "Cleared."
+        return "Memory is unavailable, sir."
+    mem.save({"facts": []}); return "Memory cleared, sir."
 
 
 def _handle_terminal(task: TaskNode, context: dict) -> str:
     cmd = (task.params.get("command") or "").strip()
     if not cmd or len(cmd) > 512 or not re.match(r"^[\w\s\-.:\\/@]+$", cmd):
-        return "Invalid command."
+        return "That command is invalid, sir."
     try:
         r = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True, timeout=15)
         o = (r.stdout or "").strip()[:400]
-        return f"Done. {o}" if o else "Done."
+        return f"Done, sir. {o}" if o else "Done, sir."
     except subprocess.TimeoutExpired:
-        return "Timed out."
+        return "The command timed out, sir."
     except Exception as e:
-        return f"Failed: {e}"
+        return f"Command failed, sir: {e}"
 
 
 def _handle_screen(task: TaskNode, context: dict) -> str:
@@ -400,18 +400,18 @@ def _handle_system_stats(task: TaskNode, context: dict) -> str:
         import psutil
         cpu = psutil.cpu_percent(interval=0.1)
         mem = psutil.virtual_memory().percent
-        return f"CPU utilization is at {cpu}%, and RAM usage is at {mem}%."
+        return f"CPU utilization is at {cpu}%, and RAM usage is at {mem}%, sir."
     except Exception:
-        return "System statistics currently unavailable."
+        return "System statistics are currently unavailable, sir."
 
 
 def _handle_wait(task: TaskNode, context: dict) -> str:
     try:
         seconds = float(task.params.get("seconds", 1.0))
         time.sleep(min(seconds, 10.0))
-        return f"Waited for {seconds} seconds."
+        return f"Certainly, sir. Paused for {seconds} seconds."
     except Exception:
-        return "Wait completed."
+        return "Done, sir."
 
 
 def _handle_not_supported(task: TaskNode, context: dict) -> str:
