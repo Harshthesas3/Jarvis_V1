@@ -61,34 +61,66 @@ def main() -> None:
         "settings": None,
     })
 
-    if args.api:
-        app.run_api_server(port=args.port)
-        return
-
     if args.health:
         for name, s in app.health_check().items():
             print(f"  {name}: {'OK' if s.healthy else 'FAIL'}")
         return
 
     if args.headless:
-        app.initialize()
-        print("\nJARVIS headless mode. Type 'exit' to quit.\n")
-        while True:
-            try:
-                user = input("You: ").strip()
-                if not user:
-                    continue
-                if user.lower() in ("exit", "quit"):
-                    break
-                from jarvis.execution.adapter import quick_plan, execute_via_engine
-                plan = quick_plan(user)
-                result = execute_via_engine(app.engine, plan, user) if plan else app.chat_with_llm(user)
-                print(f"JARVIS: {result}")
-            except KeyboardInterrupt:
+        _run_cli(app)
+        return
+
+    if args.api:
+        import webbrowser
+        print(f"\n🚀 Starting JARVIS Server at http://127.0.0.1:{args.port} ...")
+        webbrowser.open(f"http://127.0.0.1:{args.port}")
+        app.run_api_server(port=args.port)
+        return
+
+    # Default launcher mode: launch API + Web UI in browser, with CLI interactive console
+    import webbrowser
+    import threading
+
+    port = args.port
+    url = f"http://127.0.0.1:{port}"
+    print(f"\n============================================================")
+    print(f"       JARVIS OS 3.0 — Interactive Web & CLI Console        ")
+    print(f"============================================================")
+    print(f"🌐 Launching Web UI at: {url}")
+    print(f"💻 Interactive CLI active below. Type 'exit' to quit.\n")
+
+    def _start_server():
+        app.run_api_server(port=port)
+
+    t = threading.Thread(target=_start_server, daemon=True)
+    t.start()
+
+    # Open browser automatically after server initializes
+    import time
+    time.sleep(1.2)
+    webbrowser.open(url)
+
+    # Run interactive CLI in main thread
+    _run_cli(app)
+
+
+def _run_cli(app: JarvisApplication) -> None:
+    app.initialize()
+    print("\nJARVIS Interactive Console. Type 'exit' or 'quit' to exit.\n")
+    while True:
+        try:
+            user = input("You: ").strip()
+            if not user:
+                continue
+            if user.lower() in ("exit", "quit"):
                 break
-        app.shutdown()
-    else:
-        app.run()
+            from jarvis.execution.adapter import quick_plan, execute_via_engine
+            plan = quick_plan(user)
+            result = execute_via_engine(app.engine, plan, user) if plan else app.chat_with_llm(user)
+            print(f"JARVIS: {result}\n")
+        except KeyboardInterrupt:
+            break
+    app.shutdown()
 
 
 if __name__ == "__main__":
