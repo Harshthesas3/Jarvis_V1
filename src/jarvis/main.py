@@ -12,6 +12,10 @@ import argparse
 import logging
 import os
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from jarvis.app import JarvisApplication
 
 
 def _ensure_sys_path() -> None:
