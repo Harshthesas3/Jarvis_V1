@@ -203,8 +203,8 @@ def create_app(app_instance: JarvisApplication) -> FastAPI:
             cpu = psutil.cpu_percent(interval=None)
             disk = psutil.disk_usage("/")
             net = psutil.net_io_counters()
-            battery = psutil.sensors_battery()
-            temps = psutil.sensors_temperatures()
+            battery = psutil.sensors_battery() if hasattr(psutil, "sensors_battery") else None
+            temps = psutil.sensors_temperatures() if hasattr(psutil, "sensors_temperatures") else None
             return {
                 "cpu": round(cpu, 1),
                 "ram": round(mem.percent, 1),
@@ -217,7 +217,7 @@ def create_app(app_instance: JarvisApplication) -> FastAPI:
                 "net_down": round(net.bytes_recv / (1024 ** 2), 1),
                 "battery_pct": battery.percent if battery else None,
                 "battery_charging": battery.power_plugged if battery else None,
-                "temps": {k: v[0].current if v else None for k, v in temps.items()},
+                "temps": {k: v[0].current if v else None for k, v in temps.items()} if temps else {},
             }
         except Exception as exc:
             logger.warning("Metrics collection failed: %s", exc)

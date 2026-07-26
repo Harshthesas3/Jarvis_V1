@@ -138,9 +138,9 @@ def _handle_open_app(task: TaskNode, context: dict) -> str:
 
 def _handle_web_search(task: TaskNode, context: dict) -> str:
     import urllib.parse, urllib.request, html
-    q = (task.params.get("query") or "").strip()
+    q = (task.params.get("query") or task.params.get("q") or task.params.get("text") or task.params.get("search") or "").strip()
     if not q:
-        return "No query."
+        return "No query provided, sir."
     try:
         d = urllib.parse.urlencode({"q": q}).encode()
         req = urllib.request.Request("https://lite.duckduckgo.com/lite/", data=d, headers={"User-Agent": "Mozilla/5.0"})
@@ -295,7 +295,7 @@ def _handle_browser_open(task: TaskNode, context: dict) -> str:
 
 def _handle_browser_search(task: TaskNode, context: dict) -> str:
     import urllib.parse
-    q = (task.params.get("query") or "").strip()
+    q = (task.params.get("query") or task.params.get("q") or task.params.get("text") or task.params.get("search") or "").strip()
     if q:
         webbrowser.open(f"https://www.google.com/search?q={urllib.parse.quote(q)}")
         return f"Searching for {q}, sir."
@@ -380,19 +380,26 @@ def _handle_terminal(task: TaskNode, context: dict) -> str:
 
 
 def _handle_screen(task: TaskNode, context: dict) -> str:
-    import mss, ollama
+    import mss
     op = task.params.get("op", "describe")
-    prompts = {"describe": "Describe this screen.", "error": "Analyze errors.", "code_review": "Review code.", "summarize_document": "Summarize."}
+    prompts = {
+        "describe": "Describe everything currently visible on this screen in detail. If there are any errors or issues shown, point them out.",
+        "error": "Look closely at this screen capture. What error messages, tracebacks, or warning dialogs are visible?",
+        "code_review": "Review the source code visible on this screen and highlight any bugs, typos, or syntax errors.",
+        "summarize_document": "Summarize the primary document or text content visible on this screen.",
+    }
     try:
         os.makedirs("Screenshots", exist_ok=True)
         p = f"Screenshots/s_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
         with mss.MSS() as s:
             s.shot(output=p)
-        from src.jarvis.planner.llm import _get_client
-        r = _get_client().chat(model="qwen2.5vl:3b", messages=[{"role": "user", "content": prompts.get(op, prompts["describe"]), "images": [p]}])
+        from jarvis.planner.llm import _get_client
+        client = _get_client()
+        r = client.chat(model="qwen2.5vl:3b", messages=[{"role": "user", "content": prompts.get(op, prompts["describe"]), "images": [p]}])
         return r["message"]["content"]
     except Exception as e:
-        return f"Screen analysis failed: {e}"
+        logger.warning("Screen analysis failed: %s", e)
+        return f"Screen analysis is unavailable, sir. Make sure Ollama vision model 'qwen2.5vl:3b' is installed."
 
 
 def _handle_system_stats(task: TaskNode, context: dict) -> str:
