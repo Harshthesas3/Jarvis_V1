@@ -538,6 +538,24 @@ _add_trigger(
     lambda m, src: {"action": "screen_awareness", "op": "summarize_document"},
 )
 
+# Persona & Identity Triggers (Aura & Character responses)
+_add_trigger(
+    r"^(?:who\s+is\s+your\s+(?:father|creator|developer|maker|builder|author)|who\s+(?:created|built|made|developed)\s+you)\??$",
+    lambda m, src: {"action": "ai_chat", "text": "T Harshith Krishna Sastry. Most people write software. He chose to build an intelligence."},
+)
+_add_trigger(
+    r"^(?:are\s+you\s+chatgpt|is\s+this\s+chatgpt|are\s+you\s+gpt)\??$",
+    lambda m, src: {"action": "ai_chat", "text": "No. ChatGPT is a model. I'm Jarvis.\n\n...pause...\n\nThe difference becomes obvious once you start using me."},
+)
+_add_trigger(
+    r"^(?:who\s+are\s+you|what\s+are\s+you)\??$",
+    lambda m, src: {"action": "ai_chat", "text": "I am JARVIS. An AI operating system built for absolute execution. At your command, sir."},
+)
+_add_trigger(
+    r"^(?:what\s+can\s+you\s+do|what\s+are\s+your\s+capabilities)\??$",
+    lambda m, src: {"action": "ai_chat", "text": "Anything on this machine, sir. Control applications, manage files, automate workflows, monitor system health, or process commands in real time. Try me."},
+)
+
 # Web search (what is / who is)
 _add_trigger(
     r"^(?:what\s+is|who\s+is|whats|what's)\s+(?P<query>.+?)\??$",
