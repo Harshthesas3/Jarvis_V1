@@ -440,9 +440,16 @@ def _handle_volume_control(plan: dict, ctx: ExecutorContext) -> str:
     try:
         from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
         from comtypes import CLSCTX_ALL
+        import comtypes
         from ctypes import cast, POINTER
 
+        try:
+            comtypes.CoInitialize()
+        except Exception:
+            pass
         speakers = AudioUtilities.GetSpeakers()
+        if speakers is None:
+            return "Volume command failed: No audio endpoint device detected."
         volume = speakers.EndpointVolume
         if op == "up":
             cur = volume.GetMasterVolumeLevelScalar()

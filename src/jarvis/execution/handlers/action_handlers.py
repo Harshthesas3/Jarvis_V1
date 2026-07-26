@@ -200,8 +200,16 @@ class VolumeControlHandler(TaskHandler):
         try:
             from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
             from comtypes import CLSCTX_ALL
+            import comtypes
             from ctypes import cast, POINTER
-            v = AudioUtilities.GetSpeakers().EndpointVolume
+            try:
+                comtypes.CoInitialize()
+            except Exception:
+                pass
+            speakers = AudioUtilities.GetSpeakers()
+            if speakers is None:
+                return "No speakers detected."
+            v = speakers.EndpointVolume
             if op == "up":
                 v.SetMasterVolumeLevelScalar(min(v.GetMasterVolumeLevelScalar() + 0.1, 1.0), None)
                 return "Volume up."

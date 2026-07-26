@@ -10,15 +10,27 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import time
 import webbrowser
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from jarvis.interfaces.executor import TaskHandler
 from jarvis.types import ExecutionGraph, TaskNode
 
 logger = logging.getLogger("jarvis.execution.adapter")
+
+# ---------------------------------------------------------------------------
+# Legacy root-module shim
+# file_manager.py (and other root-level legacy modules) live at the project
+# root (c:\Jarvis), which is NOT on sys.path in the src-layout build.  Add it
+# once so those imports resolve correctly.
+# ---------------------------------------------------------------------------
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]  # src/jarvis/execution/adapter.py -> root
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 
 class LegacyHandlerAdapter(TaskHandler):
@@ -51,8 +63,7 @@ def get_executor_context() -> dict:
 # Plan bridge
 def quick_plan(text: str) -> Optional[dict]:
     try:
-        import sys; sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-        from planner import plan_action
+        from planner import plan_action  # root-level legacy module (path patched at import)
         return plan_action(text)
     except Exception as exc:
         logger.warning("quick_plan failed: %s", exc)
@@ -89,8 +100,7 @@ def _plan_to_graph(plan: dict) -> Optional[ExecutionGraph]:
 
 def _fallback_execute(plan: dict) -> str:
     try:
-        import sys; sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-        from planner import _dispatch
+        from planner import _dispatch  # root-level legacy module (path patched at import)
         return _dispatch(plan)
     except Exception as exc:
         return f"Execution failed: {exc}"
@@ -164,7 +174,7 @@ def _handle_date(task: TaskNode, context: dict) -> str:
 
 
 def _handle_file_operation(task: TaskNode, context: dict) -> str:
-    import file_manager
+    import file_manager  # noqa: PLC0415 – root-level legacy module (path patched above)
     op = (task.params.get("op") or "").strip()
     if not op:
         return "No operation."
@@ -174,7 +184,7 @@ def _handle_file_operation(task: TaskNode, context: dict) -> str:
 
 
 def _handle_folder_operation(task: TaskNode, context: dict) -> str:
-    import file_manager
+    import file_manager  # noqa: PLC0415 – root-level legacy module (path patched above)
     op = (task.params.get("op") or "").strip()
     if not op:
         return "No operation."
@@ -229,8 +239,16 @@ def _handle_volume_control(task: TaskNode, context: dict) -> str:
     try:
         from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
         from comtypes import CLSCTX_ALL
+        import comtypes
         from ctypes import cast, POINTER
-        v = AudioUtilities.GetSpeakers().EndpointVolume
+        try:
+            comtypes.CoInitialize()
+        except Exception:
+            pass
+        speakers = AudioUtilities.GetSpeakers()
+        if speakers is None:
+            return "Volume command failed, sir. No speaker device found."
+        v = speakers.EndpointVolume
         if op == "up":
             v.SetMasterVolumeLevelScalar(min(v.GetMasterVolumeLevelScalar() + 0.1, 1.0), None)
             return "Volume increased, sir."

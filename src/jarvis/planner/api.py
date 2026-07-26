@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Optional
-
+from typing import Callable, Optional
 from . import config, circuit_breaker, metrics, aliases
 from .llm import llm_chat_with_retry, extract_json
 from .intent import classify_intent, invoke_capability
-from .intent.capabilities import resolve_intent_to_capability
+from .intent.capabilities import resolve_capability as resolve_intent_to_capability
 from .regex.patterns import _try_fast_path
 from .context import (
     has_multi_step_intent,
@@ -30,7 +29,7 @@ _TOOL_REGISTRY: dict = {}
 _TOOL_REGISTRY_LOCK = __import__("threading").Lock()
 
 
-def register_tool(name: str, handler: callable) -> None:
+def register_tool(name: str, handler: Callable) -> None:
     """Register a handler for an action name."""
     if name not in config.SUPPORTED_ACTIONS:
         logger.warning("Registering tool for unknown action: %s", name)
@@ -75,7 +74,7 @@ def plan_action(user_text: str, *, use_llm: bool = True) -> dict:
         logger.warning("Input truncated to %d characters", config.MAX_INPUT_LENGTH)
 
     # If circuit breaker is open, skip LLM path entirely
-    if circuit_breaker.get_circuit_breaker().is_open:
+    if circuit_breaker.get_circuit_breaker().is_open():
         logger.info("Circuit breaker open — forcing regex-only path")
         use_llm = False
 
@@ -102,7 +101,7 @@ def plan_action(user_text: str, *, use_llm: bool = True) -> dict:
             decomposed = _decompose_multi_step(text)
             if decomposed is not None and "steps" in decomposed:
                 report = _validate_plan(decomposed)
-                if report is not None:
+                if report is not None:  # valid
                     logger.info(
                         "LLM-decomposed multi-step plan (%d steps) for: %s",
                         len(decomposed["steps"]),
@@ -110,8 +109,7 @@ def plan_action(user_text: str, *, use_llm: bool = True) -> dict:
                     )
                     return decomposed
                 logger.info(
-                    "LLM decomposition invalid, falling back to syntax: %s",
-                    "; ".join(report["issues"] or ["unknown"]),
+                    "LLM decomposition invalid, falling back to syntax"
                 )
         # Fall back to syntactic splitting
         clauses = split_clauses(text)
@@ -205,8 +203,11 @@ def plan_action(user_text: str, *, use_llm: bool = True) -> dict:
 def execute_plan(plan: dict) -> str:
     """Execute a validated plan. Validates before dispatching to the executor."""
     report = _validate_plan(plan)
-    if report is None:
-        msg = "; ".join(report["issues"]) if report["issues"] else "Invalid plan"
+    if report is None:  # invalid
+        # re-run validate_plan to get the issues list for the error message
+        from .validation import validate_plan as _vp
+        vr = _vp(plan)
+        msg = "; ".join(vr["issues"]) if vr["issues"] else "Invalid plan"
         logger.warning("execute_plan rejected: %s", msg)
         return f"I cannot execute that plan, sir. Invalid: {msg}"
     # Lazy import to avoid circular dependency at module load
@@ -247,7 +248,7 @@ def _plan_single(text: str, use_llm: bool = True) -> dict:
     if intent.get("confidence", 0) < config.CONFIDENCE_THRESHOLD:
         goal = intent.get("goal", "")
         logger.info("Low confidence intent (%.2f), asking for clarification", intent.get("confidence", 0))
-        metrics.record(clarifications=1)
+        metrics.record_metric(clarifications=1)
         if goal:
             msg = f"I think you want to {goal}, but I am not entirely sure. Could you please be more specific?"
         else:
@@ -391,7 +392,7 @@ def _decompose_multi_step(user_text: str) -> Optional[dict]:
                         cleaned.append(step)
                 if len(cleaned) >= 2:
                     logger.info("LLM-decomposed %d steps for: %s", len(cleaned), user_text[:80])
-                    metrics.record(multi_step_plans=1)
+                    metrics.record_metric(multi_step_plans=1)
                     return {"steps": cleaned}
         logger.warning("Multi-step decomposition returned invalid structure: %.200s", raw)
         return None

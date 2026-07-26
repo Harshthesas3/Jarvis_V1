@@ -50,7 +50,7 @@ def _get_ollama_client():
 
 def _get_speech_correction():
     """Lazy-load speech_correction module."""
-    global _speech_correction_module
+    global _speech_correction_module, _SPEECH_CORRECTION_AVAILABLE
     if _speech_correction_module is None:
         try:
             import speech_correction as _sc

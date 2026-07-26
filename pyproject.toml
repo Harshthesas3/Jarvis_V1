@@ -30,3 +30,11 @@ jarvis = "jarvis.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+pythonPlatform = "Windows"
+extraPaths = [".", "src"]
+exclude = ["venv", "__pycache__", ".git", ".pytest_cache"]
+reportMissingImports = "warning"
+reportMissingModuleSource = "none"
