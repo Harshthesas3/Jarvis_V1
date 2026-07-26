@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jarvis"
+version = "3.0.0"
+description = "Production-grade Voice & Desktop AI Assistant"
+authors = [{ name = "Jarvis Team" }]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "requests",
+    "psutil",
+    "mss",
+    "pycaw",
+    "comtypes",
+    "keyboard",
+    "ollama",
+    "fastapi",
+    "uvicorn",
+    "soundfile",
+    "sounddevice",
+    "numpy",
+    "pydantic"
+]
+
+[project.scripts]
+jarvis = "jarvis.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
