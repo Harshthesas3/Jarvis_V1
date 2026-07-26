@@ -46,7 +46,7 @@ graph TD
 
 ### Windows
 ```cmd
-git clone https://github.com/your-username/jarvis.git
+git clone https://github.com/Harshthesas3/Jarvis_V1.git
 cd jarvis
 setup.bat
 run.bat
@@ -54,7 +54,7 @@ run.bat
 
 ### Linux / macOS
 ```bash
-git clone https://github.com/your-username/jarvis.git
+git clone https://github.com/Harshthesas3/Jarvis_V1.git
 cd jarvis
 chmod +x setup.sh
 ./setup.sh
