@@ -170,7 +170,6 @@ _voice_backend = VoiceFirstBackend()
 
 
 def get_voice_backend() -> VoiceFirstBackend:
-    global _voice_backend
     return _voice_backend
 
 

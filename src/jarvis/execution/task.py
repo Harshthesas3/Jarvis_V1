@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from jarvis.types import ExecutionMode, TaskNode
+from jarvis.types import ExecutionGraph, ExecutionMode, TaskNode
 
 
 class TaskBuilder:

@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Callable, Dict, List, Tuple, Pattern, Any
+from typing import Callable, Dict, List, Optional, Tuple, Pattern, Any
 
 from ..config import get_planner_model
 from ..metrics import get_metrics

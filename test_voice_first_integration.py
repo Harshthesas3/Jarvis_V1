@@ -60,7 +60,7 @@ else:
 # Test 5: Test dismissal phrases
 if hasattr(backend, 'dismiss_phrases'):
     dismissal_phrases = backend.dismiss_phrases
-    print(f"Current dismissal phrases count: {len(dismiss_phrases)}")
+    print(f"Current dismissal phrases count: {len(dismissal_phrases)}")
     if any("sleep" in phrase.lower() for phrase in dismissal_phrases):
         print("✅ Dismissal phrases include 'sleep'")
     else:

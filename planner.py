@@ -67,9 +67,13 @@ logger = logging.getLogger("jarvis.planner")
 # ---------------------------------------------------------------------------
 # Model name — try config first, fall back to hardcoded default. (lazy-loaded)
 def _get_planner_model() -> str:
-    _s = _get_settings()
-    if _s is not None:
-        return _s.get("models.planner_model", "qwen3.5:4b")
+    try:
+        from settings_manager import get_settings
+        _s = get_settings()
+        if _s is not None:
+            return _s.get("models.planner_model", "qwen3.5:4b")
+    except Exception:
+        pass
     return "qwen3.5:4b"
 
 _PLANNER_MODEL: str = "qwen3.5:4b"  # will be resolved lazily

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 from . import config, circuit_breaker, metrics, aliases
 from .llm import llm_chat_with_retry, extract_json
 from .intent import classify_intent, invoke_capability
+from .intent.capabilities import resolve_intent_to_capability
 from .regex.patterns import _try_fast_path
 from .context import (
     has_multi_step_intent,
@@ -269,13 +271,6 @@ def _plan_single(text: str, use_llm: bool = True) -> dict:
     return {"action": "ai_chat", "text": text}
 
 
-def resolve_intent_to_capability(intent: dict) -> str:
-    """Map classified intent to the capability that should handle it."""
-    req = intent.get("required_capabilities", [])
-    for cap in req:
-        if cap in _CAPABILITY_HANDLERS:
-            return cap
-    return _INTENT_TO_CAPABILITY.get(intent.get("intent", ""), "general_chat")
 
 
 # ---------------------------------------------------------------------------
