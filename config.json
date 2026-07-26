@@ -1,0 +1,19 @@
+{
+    "paths": {
+        "piper_exe": "C:\\Users\\Harshith\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python312\\Scripts\\piper.exe",
+        "voice_model": "C:\\Users\\Harshith\\Downloads\\en_US-lessac-medium.onnx",
+        "screenshot_dir": "Screenshots"
+    },
+    "models": {
+        "chat_model": "qwen3.5:4b",
+        "planner_model": "qwen3.5:4b",
+        "vision_model": "qwen2.5vl:3b"
+    },
+    "voice": {
+        "wake_phrases": ["i'm back", "i am back", "im back"],
+        "chat_history_limit": 10
+    },
+    "system": {
+        "system_prompt": "You are JARVIS.\n\nYou are Harshith's personal AI assistant.\nAlways address Harshith as sir.\n\nKeep answers concise.\nNever use emojis.\nNever use markdown.\nSpeak naturally and professionally.\n"
+    }
+}

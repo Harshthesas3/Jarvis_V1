@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JARVIS — Voice-First AI OS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Noise / scanline overlays -->
+<div class="hud-overlay noise"></div>
+<div class="hud-overlay scanlines"></div>
+<div class="hud-overlay vignette"></div>
+
+<!-- ═══════ TOP BAR ═══════ -->
+<div class="topbar">
+  <div class="topbar-left">
+    <div class="tb-item"><span class="tb-label">APP</span><span class="tb-val" id="tb-app">—</span></div>
+    <div class="tb-divider"></div>
+    <div class="tb-item"><span class="tb-label">VOL</span><span class="tb-val" id="tb-vol">—</span></div>
+    <div class="tb-divider"></div>
+    <div class="tb-item"><span class="tb-label">MEDIA</span><span class="tb-val" id="tb-media">—</span></div>
+  </div>
+  <div class="topbar-center">
+    <span class="brand">JARVIS</span>
+    <span class="brand-ver">v3.0</span>
+  </div>
+  <div class="topbar-right">
+    <div class="tb-item"><span class="tb-label">NET ↑</span><span class="tb-val" id="tb-netup">—</span></div>
+    <div class="tb-divider"></div>
+    <div class="tb-item"><span class="tb-label">NET ↓</span><span class="tb-val" id="tb-netdn">—</span></div>
+    <div class="tb-divider"></div>
+    <div class="tb-item"><span class="tb-label">CPU</span><span class="tb-val" id="tb-cpu">—</span></div>
+    <div class="tb-divider"></div>
+    <div class="tb-item"><span class="tb-label">RAM</span><span class="tb-val" id="tb-ram">—</span></div>
+    <div class="tb-divider"></div>
+    <div class="tb-item"><span class="tb-label">DSK</span><span class="tb-val" id="tb-dsk">—</span></div>
+    <div class="tb-divider"></div>
+    <div class="tb-item"><span class="tb-label">BAT</span><span class="tb-val" id="tb-bat">—</span></div>
+    <div class="tb-divider"></div>
+    <div class="tb-item tb-clock" id="tb-clock">00:00:00</div>
+  </div>
+</div>
+
+<!-- ═══════ LEFT SIDEBAR ═══════ -->
+<aside class="sidebar sidebar-left">
+  <div class="widget" id="w-device">
+    <div class="widget-title"><span class="w-icon">◈</span> DEVICE STATUS</div>
+    <div class="widget-body">
+      <div class="device-row"><span class="dl">Active App</span><span class="dv" id="dev-app">—</span></div>
+      <div class="device-row"><span class="dl">Volume</span><span class="dv" id="dev-vol">—</span></div>
+      <div class="device-row"><span class="dl">Brightness</span><span class="dv" id="dev-brightness">—</span></div>
+      <div class="device-row"><span class="dl">Muted</span><span class="dv" id="dev-muted">No</span></div>
+    </div>
+  </div>
+  <div class="widget" id="w-wifi">
+    <div class="widget-title"><span class="w-icon">◉</span> NETWORK</div>
+    <div class="widget-body">
+      <div class="device-row"><span class="dl">SSID</span><span class="dv" id="wifi-ssid">—</span></div>
+      <div class="device-row"><span class="dl">Signal</span><span class="dv" id="wifi-signal">—</span></div>
+      <div class="device-row"><span class="dl">IP</span><span class="dv" id="wifi-ip">—</span></div>
+      <div class="wifi-bar-wrap"><div class="wifi-bar" id="wifi-bar" style="width:99%"></div></div>
+      <div class="wifi-label" id="wifi-label">99%</div>
+    </div>
+  </div>
+  <div class="widget" id="w-todo">
+    <div class="widget-title"><span class="w-icon">◈</span> TODO</div>
+    <div class="widget-body" id="todo-list">
+      <div class="todo-item">Backup themes</div>
+      <div class="todo-item">Volume control</div>
+      <div class="todo-item">Winamp skin</div>
+    </div>
+  </div>
+  <div class="widget" id="w-storage">
+    <div class="widget-title"><span class="w-icon">◉</span> STORAGE</div>
+    <div class="widget-body">
+      <div class="storage-bar-wrap"><div class="storage-bar" id="storage-bar" style="width:45%"></div></div>
+      <div class="storage-label"><span id="storage-used">218 GB</span> / <span id="storage-total">500 GB</span></div>
+      <div class="device-row"><span class="dl">Read</span><span class="dv" id="disk-read">—</span></div>
+      <div class="device-row"><span class="dl">Write</span><span class="dv" id="disk-write">—</span></div>
+    </div>
+  </div>
+  <div class="widget" id="w-downloads">
+    <div class="widget-title"><span class="w-icon">◈</span> DOWNLOADS</div>
+    <div class="widget-body" id="downloads-list">
+      <div class="dl-item">—</div>
+    </div>
+  </div>
+  <div class="widget" id="w-power">
+    <div class="widget-title"><span class="w-icon">◉</span> POWER</div>
+    <div class="widget-body">
+      <div class="power-val" id="power-val">—</div>
+      <div class="device-row"><span class="dl">Status</span><span class="dv" id="power-status">—</span></div>
+      <div class="device-row"><span class="dl">Time Left</span><span class="dv" id="power-time">—</span></div>
+    </div>
+  </div>
+</aside>
+
+<!-- ═══════ CENTER HUD ═══════ -->
+<main class="center-hud">
+  <canvas id="hud-canvas"></canvas>
+  <!-- Voice status indicator (always visible) -->
+  <div class="voice-status" id="voice-status">
+    <div class="voice-status-indicator" id="voice-indicator"></div>
+    <span class="voice-status-text" id="voice-status-text">Listening for "I am back"...</span>
+  </div>
+  <!-- Command input -->
+  <div class="hud-command-bar" id="hud-command-bar">
+    <input type="text" id="hud-input" placeholder="Type a command..." autocomplete="off" />
+  </div>
+</main>
+
+<!-- ═══════ RIGHT SIDEBAR ═══════ -->
+<aside class="sidebar sidebar-right">
+  <div class="widget" id="w-notes">
+    <div class="widget-title"><span class="w-icon">◈</span> NOTES</div>
+    <div class="widget-body">
+      <textarea id="notes-area" placeholder="Type notes..."></textarea>
+    </div>
+  </div>
+  <div class="widget" id="w-about">
+    <div class="widget-title"><span class="w-icon">◉</span> ABOUT</div>
+    <div class="widget-body">
+      <div class="about-text">JARVIS Voice-First AI OS<br>v3.0.0 — Iron Man Edition</div>
+    </div>
+  </div>
+  <div class="widget" id="w-weather">
+    <div class="widget-title"><span class="w-icon">◉</span> WEATHER</div>
+    <div class="widget-body">
+      <div class="weather-val" id="weather-val">—</div>
+      <div class="device-row"><span class="dl">Location</span><span class="dv" id="weather-loc">—</span></div>
+      <div class="device-row"><span class="dl">Humidity</span><span class="dv" id="weather-hum">—</span></div>
+      <div class="device-row"><span class="dl">Wind</span><span class="dv" id="weather-wind">—</span></div>
+    </div>
+  </div>
+  <div class="widget" id="w-network">
+    <div class="widget-title"><span class="w-icon">◈</span> NETWORK</div>
+    <div class="widget-body">
+      <div class="net-row"><span class="dl">LAN</span><span class="dv" id="net-lan">—</span></div>
+      <div class="net-row"><span class="dl">WAN</span><span class="dv" id="net-wan">—</span></div>
+      <div class="net-row"><span class="dl">Upload</span><span class="dv" id="net-up">—</span></div>
+      <div class="net-row"><span class="dl">Download</span><span class="dv" id="net-dn">—</span></div>
+    </div>
+  </div>
+  <div class="widget" id="w-music">
+    <div class="widget-title"><span class="w-icon">◉</span> MUSIC PLAYER</div>
+    <div class="widget-body">
+      <div class="music-art" id="music-art"></div>
+      <div class="music-track" id="music-track">No track</div>
+      <div class="music-artist" id="music-artist">—</div>
+      <div class="music-album" id="music-album">—</div>
+      <div class="music-progress-wrap">
+        <div class="music-progress" id="music-progress" style="width:0%"></div>
+      </div>
+      <div class="music-time">
+        <span id="music-current">0:00</span>
+        <span id="music-duration">0:00</span>
+      </div>
+      <div class="music-controls">
+        <button class="mc-btn" onclick="musicCmd('shuffle')" id="mc-shuffle">⟳</button>
+        <button class="mc-btn" onclick="musicCmd('previous')" id="mc-prev">⏮</button>
+        <button class="mc-btn mc-play" onclick="musicCmd('play')" id="mc-play">▶</button>
+        <button class="mc-btn" onclick="musicCmd('next')" id="mc-next">⏭</button>
+        <button class="mc-btn" onclick="musicCmd('repeat')" id="mc-repeat">⟲</button>
+      </div>
+      <div class="music-volume">
+        <input type="range" id="music-vol" min="0" max="100" value="80" oninput="musicCmd('volume', this.value)">
+        <span id="music-vol-label">80%</span>
+      </div>
+      <div class="music-device">
+        <span class="dl">Device:</span>
+        <span class="dv" id="music-device">—</span>
+      </div>
+    </div>
+  </div>
+  <div class="widget" id="w-gpu">
+    <div class="widget-title"><span class="w-icon">◉</span> GPU</div>
+    <div class="widget-body">
+      <div class="device-row"><span class="dl">Name</span><span class="dv" id="gpu-name">—</span></div>
+      <div class="device-row"><span class="dl">Load</span><span class="dv" id="gpu-load">—</span></div>
+      <div class="device-row"><span class="dl">VRAM</span><span class="dv" id="gpu-vram">—</span></div>
+      <div class="device-row"><span class="dl">Temp</span><span class="dv" id="gpu-temp">—</span></div>
+    </div>
+  </div>
+</aside>
+
+<!-- ═══════ BOTTOM DOCK ═══════ -->
+<nav class="dock">
+  <div class="dock-item" data-action="explorer"><div class="dock-icon">📁</div><span>Explorer</span></div>
+  <div class="dock-item" data-action="chrome"><div class="dock-icon">🌐</div><span>Browser</span></div>
+  <div class="dock-item" data-action="steam"><div class="dock-icon">🎮</div><span>Steam</span></div>
+  <div class="dock-item" data-action="terminal"><div class="dock-icon">⌨</div><span>Terminal</span></div>
+  <!-- Voice status in dock center (no button) -->
+  <div class="dock-item dock-center" id="dock-voice-status">
+    <div class="dock-voice-indicator" id="dock-voice-indicator"></div>
+    <span>Listening...</span>
+  </div>
+  <div class="dock-item" data-action="music"><div class="dock-icon">♫</div><span>Music</span></div>
+  <div class="dock-item" data-action="settings"><div class="dock-icon">⚙</div><span>Settings</span></div>
+  <div class="dock-item" data-action="desktop"><div class="dock-icon">🖥</div><span>Desktop</span></div>
+</nav>
+
+<!-- ═══════ COMMAND LOG OVERLAY ═══════ -->
+<div id="cmd-log" class="cmd-log"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

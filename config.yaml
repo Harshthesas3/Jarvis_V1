@@ -1,0 +1,31 @@
+# JARVIS Configuration File
+
+system:
+  env: production
+  debug: false
+  host: "127.0.0.1"
+  port: 8000
+
+models:
+  chat_model: "qwen3.5:4b"
+  vision_model: "qwen2.5vl:3b"
+  ollama_host: "http://localhost:11434"
+
+voice:
+  wake_phrases:
+    - "i'm back"
+    - "hey jarvis"
+    - "jarvis"
+    - "ok jarvis"
+  stt:
+    wake_model: "tiny"
+    cmd_model: "base"
+  tts:
+    engine: "piper"
+    piper_exe: ""
+    voice_model: ""
+
+paths:
+  memory_file: "memory.json"
+  reminders_file: "reminders.json"
+  screenshots_dir: "Screenshots"
