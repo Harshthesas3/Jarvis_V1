@@ -7,6 +7,8 @@ import os
 import time
 from typing import Any, Dict, Optional
 
+# StartupManager is imported lazily inside initialize() to keep import time short.
+
 from jarvis.di.container import ServiceContainer
 from jarvis.eventbus.bus import InMemoryEventBus
 from jarvis.eventbus.events import (
@@ -50,6 +52,11 @@ class JarvisApplication:
         self._running = False
         self._start_time: float = 0.0
         self._fast_router = None
+        # Pre-warmed components populated by StartupManager during initialize()
+        self._wake_model: Optional[Any] = None
+        self._cmd_model: Optional[Any] = None
+        self._speaker: Optional[Any] = None
+        self._startup_manager: Optional[Any] = None
         self._register_core_services()
 
     def _register_core_services(self) -> None:
@@ -81,6 +88,10 @@ class JarvisApplication:
 
         self._register_job_system()
         self._register_handlers()
+
+        # Pre-warm all expensive subsystems concurrently before signalling ready.
+        self._prewarm()
+
         self._event_bus.publish(SystemEvent(type=SYSTEM_STARTED, source="app"))
         self._logger.info("JARVIS initialization complete")
 
@@ -131,6 +142,38 @@ class JarvisApplication:
         for action_name, handler_fn in ADAPTER_ACTIONS.items():
             self._engine.register_handler(LegacyHandlerAdapter(action_name, handler_fn))
 
+    def _prewarm(self) -> None:
+        """Launch concurrent pre-warming of all expensive subsystems.
+
+        Runs StartupManager.prewarm_all() which blocks until all tasks finish
+        or timeout (30 s).  If prewarm succeeds the pre-loaded models are saved
+        onto self so _main_loop() can use them immediately.
+        """
+        from jarvis.services.config import ConfigService
+        from jarvis.startup import get_startup_manager
+        from jarvis.startup.telemetry import StartupTelemetry
+
+        cfg = self._container.resolve(ConfigService)
+        mgr = get_startup_manager()
+        self._startup_manager = mgr
+
+        mgr.prewarm_all(cfg)
+
+        # Retrieve pre-loaded components (None if that subsystem failed)
+        if mgr.is_ready("whisper"):
+            self._wake_model = mgr.wake_model
+            self._cmd_model = mgr.cmd_model
+        if mgr.is_ready("piper"):
+            self._speaker = mgr.speaker
+        if mgr.is_ready("router"):
+            self._fast_router = mgr.fast_router
+
+        # Record startup timing into telemetry
+        st = StartupTelemetry()
+        timeline = mgr.get_timeline()
+        st.record_startup(timeline, warm=False)
+        st.report(timeline)
+
     def run(self) -> None:
         if self._running:
             return
@@ -151,21 +194,29 @@ class JarvisApplication:
         voice = cfg.get("paths.voice_model")
         import sounddevice as sd
         import numpy as np
-        from faster_whisper import WhisperModel
 
-        self._logger.info("Loading ASR models...")
-        wake_model_size = cfg.get("models.stt_wake_model", "tiny")
-        cmd_model_size = cfg.get("models.stt_command_model", "distil-whisper/distil-small.en")
-        self._logger.info("Wake model: %s  Command model: %s", wake_model_size, cmd_model_size)
-        try:
-            wake_model = WhisperModel(wake_model_size, device="cpu", compute_type="int8")
-            cmd_model = WhisperModel(cmd_model_size, device="cpu", compute_type="int8")
-        except Exception as exc:
-            self._logger.warning(
-                "Could not load distil model (%s), falling back to 'base': %s", cmd_model_size, exc
+        # Use pre-warmed models if available; lazy-load only as fallback.
+        wake_model = self._wake_model
+        cmd_model = self._cmd_model
+        if wake_model is None or cmd_model is None:
+            from faster_whisper import WhisperModel
+            wake_model_size = cfg.get("models.stt_wake_model", "tiny")
+            cmd_model_size = cfg.get("models.stt_command_model", "distil-whisper/distil-small.en")
+            self._logger.info(
+                "Pre-warm missed — loading ASR models now (cold): wake=%s cmd=%s",
+                wake_model_size, cmd_model_size,
             )
-            cmd_model = WhisperModel("base", device="cpu", compute_type="int8")
-        self._logger.info("Models loaded.")
+            try:
+                wake_model = WhisperModel(wake_model_size, device="cpu", compute_type="int8")
+                cmd_model = WhisperModel(cmd_model_size, device="cpu", compute_type="int8")
+            except Exception as exc:
+                self._logger.warning(
+                    "Could not load distil model (%s), falling back to 'base': %s",
+                    cmd_model_size, exc,
+                )
+                cmd_model = WhisperModel("base", device="cpu", compute_type="int8")
+        else:
+            self._logger.info("ASR models ready (pre-warmed). No cold start.")
 
         from jarvis.execution.adapter import quick_plan, execute_via_engine
         from scipy.io.wavfile import write as write_wav
@@ -463,11 +514,17 @@ class JarvisApplication:
         )
 
     def health_check(self) -> Dict[str, ServiceHealth]:
-        return {
+        health = {
             "event_bus": ServiceHealth(name="event_bus", healthy=True),
             "engine": ServiceHealth(name="engine", healthy=self._engine is not None),
             "job_service": ServiceHealth(name="job_service", healthy=self._job_service is not None),
         }
+        # Include per-subsystem startup readiness if pre-warm has run
+        if self._startup_manager is not None:
+            for subsystem in ("whisper", "ollama", "piper", "chroma", "router"):
+                ready = self._startup_manager.is_ready(subsystem)
+                health[f"startup_{subsystem}"] = ServiceHealth(name=f"startup_{subsystem}", healthy=ready)
+        return health
 
     @property
     def container(self) -> ServiceContainer:
