@@ -462,7 +462,46 @@ def _dispatch(plan: dict) -> str:
 # ---------------------------------------------------------------------------
 # Deterministic fast-path
 # ---------------------------------------------------------------------------
+
+def _math_fast_path(m: re.Match) -> dict:
+    """Evaluate simple two-operand arithmetic from a regex match."""
+    import operator
+
+    a = float(m.group("a"))
+    b = float(m.group("b"))
+    op = m.group("op").strip().lower()
+    ops = {
+        "plus": operator.add,
+        "minus": operator.sub,
+        "times": operator.mul,
+        "multiplied by": operator.mul,
+        "divided by": operator.truediv,
+        "over": operator.truediv,
+    }
+    try:
+        result = ops[op](a, b)
+    except ZeroDivisionError:
+        return {"action": "ai_chat", "text": "That would be division by zero, sir."}
+    if result == int(result):
+        result = int(result)
+    text = f"The answer is {result}."
+    return {"action": "ai_chat", "text": text, "_direct_text": True}
+
 _FAST_PATH_TRIGGERS: List[Tuple[re.Pattern, Callable]] = [
+    # ---------------------------------------------------------------
+    # Simple arithmetic: "what is 2 plus 2", "calculate 5 times 3" etc.
+    # Must come before web_search so math is not misrouted.
+    # ---------------------------------------------------------------
+    (
+        re.compile(
+            r"^(?:what(?:'s| is)?|whats|calculate|compute|math|solve)\s+"
+            r"(?P<a>\d+(?:\.\d+)?)\s*"
+            r"(?P<op>plus|minus|times|multiplied\s+by|divided\s+by|over)\s*"
+            r"(?P<b>\d+(?:\.\d+)?)\s*$",
+            re.IGNORECASE,
+        ),
+        lambda m, src: _math_fast_path(m),
+    ),
     # ---------------------------------------------------------------
     # Close app — "close <app>" or "quit <app>"
     # ---------------------------------------------------------------
@@ -933,6 +972,18 @@ _FAST_PATH_TRIGGERS: List[Tuple[re.Pattern, Callable]] = [
     (
         re.compile(
             r"^remind\s+me\s+(?P<time>.+?)\s+to\s+(?P<task>.+)$", re.IGNORECASE
+        ),
+        lambda m, src: {
+            "action": "reminder",
+            "time": m.group("time").strip(),
+            "task": m.group("task").strip(),
+        },
+    ),
+    # "remind me to <task> in <time>" — common spoken phrasing.
+    (
+        re.compile(
+            r"^remind\s+me\s+to\s+(?P<task>.+?)\s+in\s+(?P<time>.+)$",
+            re.IGNORECASE,
         ),
         lambda m, src: {
             "action": "reminder",
@@ -2905,6 +2956,12 @@ def plan_action(user_text: str, *, use_llm: bool = True) -> dict:
     if clarification is not None:
         logger.info("Clarification needed: %s", clarification["question"])
         return clarification
+
+    # Deterministic answers (math etc.) short-circuit before multi-step
+    # detection so they never fall into the LLM path.
+    _direct = _try_fast_path(text)
+    if _direct is not None and _direct.get("_direct_text"):
+        return _direct
 
     # Multi-step path: use LLM decomposition for logical task planning,
     # fall back to syntactic clause splitting if LLM unavailable.

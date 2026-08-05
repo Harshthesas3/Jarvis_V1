@@ -414,7 +414,7 @@ def _capture_command_audio(threshold: float = 0.02, fs: int = 16000, max_wait: f
         elif started:
             chunks.append(data)
             silent_chunks += 1
-            if silent_chunks >= 12:  # 1.2 s of trailing silence
+            if silent_chunks >= 6:  # 0.6 s of trailing silence
                 break
         if not started and waited >= max_chunks:
             break
@@ -539,7 +539,9 @@ def main() -> None:
                 speak(fast_result)
                 continue
 
-            plan = plan_action(user)
+            # Regex-only planning (sub-ms). The LLM classify path costs
+            # 2-9 s of sequential model calls, which blows the 3 s budget.
+            plan = plan_action(user, use_llm=False)
             t_plan = time.perf_counter()
             print(f"[TIMING] Planner: {t_plan - t_route:.3f}s")
             print("PLAN:", plan)
@@ -547,8 +549,11 @@ def main() -> None:
             # Streaming chat: speak the first sentence while the LLM keeps
             # generating instead of waiting for the full response + full TTS.
             if plan.get("action") == "ai_chat":
-                print("STREAMING AI CHAT")
-                _stream_chat_and_speak(plan.get("text", user))
+                if plan.get("_direct_text"):
+                    speak(plan.get("text"))
+                else:
+                    print("STREAMING AI CHAT")
+                    _stream_chat_and_speak(user)
                 continue
 
             try:
@@ -574,21 +579,31 @@ def _stream_chat_and_speak(text: str) -> None:
     buffer = ""
     t0 = time.perf_counter()
     printed = ""
+    first_frag_at = None
 
+    # Flush as soon as we have a complete sentence OR ~22 chars of a
+    # long first sentence, so the first audio starts right after TTFB.
     _FLUSH_RE = re.compile(r".*[.!?]\s*$", re.S)
 
     def _flush():
         nonlocal buffer
-        if buffer.strip():
+        if buffer.strip() and re.search(r"[a-zA-Z0-9]", buffer):
             speaker.feed(buffer)
-            buffer = ""
+        buffer = ""
 
     for frag in chat_stream_ollama(text):
         if frag is None:
             continue
+        if first_frag_at is None:
+            first_frag_at = time.perf_counter()
+            print(f"[TIMING] LLM first content: {(first_frag_at - t0) * 1000:.0f} ms")
         printed += frag
         buffer += frag
-        if _FLUSH_RE.match(buffer):
+        # Sentence boundary, OR a long fragment ending at a word boundary
+        # (split only on whitespace so piper never receives half a word).
+        if _FLUSH_RE.match(buffer) or (
+            len(buffer) >= 22 and buffer.endswith((" ", "\n"))
+        ):
             _flush()
     _flush()
     print(f"\nJARVIS: {printed}")
