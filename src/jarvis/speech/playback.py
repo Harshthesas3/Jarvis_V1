@@ -3,9 +3,6 @@ import time
 import logging
 import threading
 
-import sounddevice as sd
-import soundfile as sf
-
 logger = logging.getLogger("jarvis.speech.playback")
 
 _lock = threading.Lock()
@@ -19,6 +16,7 @@ def stop_sound() -> None:
     """Immediately stop any playing sound and schedule temporary WAV cleanup."""
     global _is_playing
     try:
+        import sounddevice as sd
         sd.stop()
     except Exception as e:
         logger.debug("Error stopping sounddevice: %s", e)
@@ -51,6 +49,7 @@ def play_wav_async(path: str) -> None:
     stop_sound()
 
     try:
+        import soundfile as sf
         abs_path = os.path.abspath(path)
         data, fs = sf.read(abs_path)
 
@@ -64,6 +63,7 @@ def play_wav_async(path: str) -> None:
         def _play_thread():
             global _is_playing
             try:
+                import sounddevice as sd
                 sd.play(data, fs)
                 sd.wait()
             except Exception as e:
