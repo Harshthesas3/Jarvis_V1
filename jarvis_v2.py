@@ -163,7 +163,6 @@ def _detect_length_profile(text: str) -> str:
 
 
 def _build_system_prompt(text: str = "") -> str:
-    global _facts_cache
     now = time.time()
     base_prompt = SYSTEM_PROMPT
     facts = memory_mod.load().get("facts", [])
