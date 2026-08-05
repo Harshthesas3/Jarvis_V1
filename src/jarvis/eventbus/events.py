@@ -52,6 +52,23 @@ PLUGIN_UNLOADED = "plugin.unloaded"
 PLUGIN_ERROR = "plugin.error"
 PLUGIN_HOT_RELOADED = "plugin.hot_reloaded"
 
+# Jobs (background queue / long-running work)
+JOB_QUEUED = "job.queued"
+JOB_STARTED = "job.started"
+JOB_PROGRESS = "job.progress"
+JOB_COMPLETED = "job.completed"
+JOB_FAILED = "job.failed"
+JOB_CANCELLED = "job.cancelled"
+
+# Projects / Workspaces
+WORKSPACE_CREATED = "workspace.created"
+PROJECT_SCAFFOLDED = "project.scaffolded"
+SPEC_GENERATED = "project.spec_generated"
+OPENCODE_LAUNCHED = "project.opencode_launched"
+OPENCODE_PROGRESS = "project.opencode_progress"
+OPENCODE_COMPLETED = "project.opencode_completed"
+OPENCODE_FAILED = "project.opencode_failed"
+
 # Automation
 APP_LAUNCHED = "automation.app_launched"
 APP_CLOSED = "automation.app_closed"
@@ -60,7 +77,19 @@ SEARCH_PERFORMED = "automation.search_performed"
 SCREENSHOT_TAKEN = "automation.screenshot_taken"
 UI_ACTION_PERFORMED = "automation.ui_action_performed"
 
-# Errors
 ERROR_OCCURRED = "error.occurred"
 ERROR_RECOVERED = "error.recovered"
 ERROR_UNRECOVERABLE = "error.unrecoverable"
+
+# Phase 7 Event Aliases
+WakeDetected = "voice.wake_word_detected"
+SpeechStarted = "voice.speech_started"
+SpeechFinished = "voice.speech_complete"
+IntentRecognized = "plan.intent_classified"
+ResponseStarted = "plan.started"
+ResponseFinished = "plan.complete"
+PlaybackInterrupted = "voice.playback_interrupted"
+JobCreated = "job.queued"
+JobProgress = "job.progress"
+JobCompleted = "job.completed"
+Notification = "notification"

@@ -115,44 +115,90 @@ _FACTS_CACHE_TTL = 5.0  # seconds
 # (faiss / sentence-transformers imports) does not block startup.
 memory_mod = LegacyMemoryWrapper()
 
+import re
+from typing import Optional, Tuple
 
-def _build_system_prompt() -> str:
+class LatencyProfiler:
+    def __init__(self):
+        self.timings = {}
+        self.start_times = {}
+
+    def start(self, phase: str):
+        self.start_times[phase] = time.perf_counter()
+
+    def stop(self, phase: str):
+        if phase in self.start_times:
+            self.timings[phase] = (time.perf_counter() - self.start_times[phase]) * 1000.0
+
+    def log_report(self):
+        total = self.timings.get("Total")
+        if total is None and "Total" in self.start_times:
+            total = (time.perf_counter() - self.start_times["Total"]) * 1000.0
+            self.timings["Total"] = total
+
+        report_lines = ["\n============================================================",
+                        "                      LATENCY TELEMETRY                     ",
+                        "============================================================"]
+        phases = ["Wake", "Recording", "STT", "Intent", "Memory", "LLM", "TTS", "Playback", "Total"]
+        for p in phases:
+            val = self.timings.get(p)
+            if val is not None:
+                report_lines.append(f"{p}: {val:.0f}ms")
+        report_lines.append("============================================================")
+        print("\n".join(report_lines))
+
+
+from jarvis.services.identity import IdentityManager
+from jarvis.services.response_engine import DynamicResponseEngine
+
+_identity_manager = IdentityManager()
+_response_engine = DynamicResponseEngine()
+
+def _check_identity_query(text: str) -> Optional[str]:
+    return _identity_manager.match_query(text)
+
+
+def _detect_length_profile(text: str) -> str:
+    return _response_engine.estimate_complexity(text)["instruction"]
+
+
+def _build_system_prompt(text: str = "") -> str:
     global _facts_cache
     now = time.time()
-    if now - _facts_cache[0] < _FACTS_CACHE_TTL:
-        return _facts_cache[1]
-
+    base_prompt = SYSTEM_PROMPT
     facts = memory_mod.load().get("facts", [])
-    if not facts:
-        result = SYSTEM_PROMPT
-    else:
+    if facts:
         facts_str = "\n".join(f"- {f}" for f in facts)
-        result = (
-            SYSTEM_PROMPT
-            + "\nHere are facts you remember about Harshith:\n"
-            + facts_str
-        )
-    _facts_cache = (now, result)
-    return result
+        base_prompt += "\nHere are facts you remember about Harshith:\n" + facts_str
+    
+    if text:
+        profile_guidance = _detect_length_profile(text)
+        base_prompt += f"\n[Constraint: {profile_guidance}]"
+        
+    return base_prompt
 
 
 _LLM_KWARGS = {"keep_alive": -1, "think": False}
 
 
 def chat_with_ollama(text: str) -> str:
-    """Send `text` to the local chat model, keeping a rolling history of
-    the last 10 user/assistant turns and injecting the persistent fact
-    store into the system prompt on every call."""
+    """Send `text` to the local chat model, keeping a rolling history."""
     import ollama
 
     if not text or not text.strip():
         return ""
 
+    identity_response = _check_identity_query(text)
+    if identity_response:
+        chat_history.append({"role": "user", "content": text})
+        chat_history.append({"role": "assistant", "content": identity_response})
+        return identity_response
+
     chat_history.append({"role": "user", "content": text})
     if len(chat_history) > CHAT_HISTORY_LIMIT * 2:
         chat_history[:] = chat_history[-CHAT_HISTORY_LIMIT * 2:]
 
-    messages = [{"role": "system", "content": _build_system_prompt()}] + chat_history
+    messages = [{"role": "system", "content": _build_system_prompt(text)}] + chat_history
     try:
         stream = ollama.chat(
             model=CHAT_MODEL,
@@ -175,22 +221,26 @@ def chat_with_ollama(text: str) -> str:
 
 
 def chat_stream_ollama(text: str, on_text=None):
-    """Stream a chat response from the local model.
-
-    Yields content fragments as they arrive (thinking disabled, model pinned
-    in memory). ``on_text`` is called with each fragment; the caller can feed
-    TTS incrementally so speech overlaps generation.
-    """
+    """Stream a chat response from the local model."""
     import ollama
 
     if not text or not text.strip():
+        return
+
+    identity_response = _check_identity_query(text)
+    if identity_response:
+        chat_history.append({"role": "user", "content": text})
+        chat_history.append({"role": "assistant", "content": identity_response})
+        if on_text is not None:
+            on_text(identity_response)
+        yield identity_response
         return
 
     chat_history.append({"role": "user", "content": text})
     if len(chat_history) > CHAT_HISTORY_LIMIT * 2:
         chat_history[:] = chat_history[-CHAT_HISTORY_LIMIT * 2:]
 
-    messages = [{"role": "system", "content": _build_system_prompt()}] + chat_history
+    messages = [{"role": "system", "content": _build_system_prompt(text)}] + chat_history
     reply_parts: list[str] = []
     try:
         stream = ollama.chat(
@@ -215,16 +265,12 @@ def chat_stream_ollama(text: str, on_text=None):
         reply = "".join(reply_parts)
         chat_history.append({"role": "assistant", "content": reply})
 
+
 # ---------------------------------------------------------------------------
 # TTS
 # ---------------------------------------------------------------------------
 def speak(text: str) -> None:
-    """Synthesize and play *text* in-process (non-blocking, gapless).
-
-    Uses :class:`jarvis.speech.piper_rt.StreamingSpeaker`, which keeps the
-    Piper ONNX voice loaded once and plays through a persistent audio queue
-    (~1 s per sentence instead of ~2.7 s per subprocess utterance).
-    """
+    """Synthesize and play *text* in-process (non-blocking, gapless)."""
     print(f"\nJarvis: {text}")
     if not text:
         return
@@ -238,13 +284,14 @@ def speak(text: str) -> None:
 
 
 def wait_until_spoken(timeout: float = 30.0) -> None:
-    """Block until the current TTS utterance finishes (compat helper)."""
+    """Block until the current TTS utterance finishes."""
     from jarvis.speech.piper_rt import get_speaker
 
     try:
         get_speaker(VOICE).wait_until_done(timeout=timeout)
     except Exception:
         pass
+
 
 # ---------------------------------------------------------------------------
 # Audio capture
@@ -253,11 +300,7 @@ import numpy as np
 
 
 def _mic_chunks(fs: int = 16000, chunk_frames: int = 1600, threshold: float = 0.02):
-    """Yield ``(volume, float32_mono_chunk)`` pairs from a persistent mic stream.
-
-    A single InputStream stays open for the whole listen session, which
-    removes the per-utterance device open/close overhead of ``sd.rec``.
-    """
+    """Yield ``(volume, float32_mono_chunk)`` pairs from a persistent mic stream."""
     import queue as _queue
     import sounddevice as sd
 
@@ -300,9 +343,10 @@ def record_until_silence(filename: str, silence_duration: float = 1.5, threshold
     from scipy.io.wavfile import write
 
     stop_sound()
-    chunks = _capture_command_audio(threshold=threshold, fs=fs, max_wait=30)
+    chunks, _ = _capture_command_audio(threshold=threshold, fs=fs, max_wait=30)
     if chunks:
         write(filename, fs, (np.concatenate(chunks) * 32767).astype(np.int16))
+
 
 # ---------------------------------------------------------------------------
 # Models
@@ -340,7 +384,7 @@ def _transcribe_numpy(model, audio: np.ndarray, *, beam_size: int = 1) -> str:
 # ---------------------------------------------------------------------------
 # Wake / listen
 # ---------------------------------------------------------------------------
-def wait_for_wake_word(wake_model) -> None:
+def wait_for_wake_word(wake_model) -> float:
     print("\nSleeping...")
     print("Say: I'm back")
     chunk_frames = 1600  # 100 ms
@@ -363,9 +407,6 @@ def wait_for_wake_word(wake_model) -> None:
                 buffer.append(data)
                 silent_chunks += 1
 
-            # Transcribe once we have a complete short utterance:
-            # at least 400 ms of speech, then either 700 ms of silence
-            # or a hard 2.0 s cap.
             if (
                 had_speech
                 and speech_chunks >= 4
@@ -391,24 +432,46 @@ def wait_for_wake_word(wake_model) -> None:
         if any(p in text_lower for p in WAKE_PHRASES):
             print("Wake phrase detected.")
             speak("Systems online, sir. Awaiting instructions.")
-            break
+            return stt_ms
 
 
-def _capture_command_audio(threshold: float = 0.02, fs: int = 16000, max_wait: float = 30.0) -> list[np.ndarray]:
-    """Record until silence, returning float32 chunks (never touches disk)."""
-    stop_sound()
+def _capture_command_audio(threshold: float = 0.02, fs: int = 16000, max_wait: float = 30.0) -> Tuple[list[np.ndarray], float]:
+    """Record until silence, returning float32 chunks (never touches disk). Handles interruption."""
+    from jarvis.speech.playback import _is_playing, stop_sound
+    from jarvis.speech.piper_rt import get_speaker
+    
     chunk_frames = int(fs * 0.1)
     chunks: list[np.ndarray] = []
     started = False
     silent_chunks = 0
     waited = 0
     max_chunks = int(max_wait / 0.1)
+    t_start = time.perf_counter()
 
     for vol, data in _mic_chunks(fs=fs, chunk_frames=chunk_frames):
         waited += 1
-        if vol > threshold:
+        
+        is_playing = False
+        try:
+            sp = get_speaker(VOICE)
+            is_playing = sp._synth_in_flight() or not sp._audio_q.empty()
+        except Exception:
+            pass
+
+        # Increase threshold slightly when JARVIS is talking to prevent self-interruption from mic feedback
+        current_threshold = threshold * 1.5 if is_playing else threshold
+
+        if vol > current_threshold:
+            if is_playing:
+                logger.info("Interruption detected. Stopping playback.")
+                stop_sound()
+                try:
+                    get_speaker(VOICE).stop()
+                except Exception:
+                    pass
             if not started:
                 started = True
+                t_start = time.perf_counter()
             chunks.append(data)
             silent_chunks = 0
         elif started:
@@ -418,14 +481,16 @@ def _capture_command_audio(threshold: float = 0.02, fs: int = 16000, max_wait: f
                 break
         if not started and waited >= max_chunks:
             break
-    return chunks
+            
+    rec_time = (time.perf_counter() - t_start) * 1000.0 if started else 0.0
+    return chunks, rec_time
 
 
-def listen_command(command_model) -> str:
+def listen_command(command_model) -> Tuple[str, float, float]:
     print("\nListening...")
-    chunks = _capture_command_audio()
+    chunks, rec_time = _capture_command_audio()
     if not chunks:
-        return ""
+        return "", rec_time, 0.0
     audio = np.concatenate(chunks)
     print("Transcribing...")
     t0 = time.perf_counter()
@@ -433,17 +498,16 @@ def listen_command(command_model) -> str:
         text = _transcribe_numpy(command_model, audio)
     except Exception as exc:
         logger.warning("Command transcription failed: %s", exc)
-        return ""
-    print(f"[TIMING] STT: {(time.perf_counter() - t0) * 1000:.0f} ms")
-    return text
+        return "", rec_time, 0.0
+    stt_time = (time.perf_counter() - t0) * 1000.0
+    print(f"[TIMING] STT: {stt_time:.0f} ms")
+    return text, rec_time, stt_time
+
 
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 def main() -> None:
-    # 1. Wire executor context. `chat` is the AI fallback used by the
-    #    ai_chat handler, by web_search summarization, and by the
-    #    clipboard "summarize" op. `memory` is the persistent fact store.
     context = {
         "speak": speak,
         "apps": INSTALLED_APPS,
@@ -466,16 +530,20 @@ def main() -> None:
         from planner import register_tool
         register_tool(action, handler)
 
-    # 2. Initialize agent orchestrator
+    # Register background project build tool (additive; never blocks voice)
+    from planner import register_tool as _register_tool
+    from jarvis.bridge.voice import build_project_handler
+    _register_tool("build_project", build_project_handler)
+
+    # Initialize agent orchestrator
     orchestrator = get_orchestrator(context)
     orchestrator.start_all_agents()
     logger.info("Agent orchestrator started with %d agents", len(orchestrator.agents))
 
-    # 3. Reminder checker runs in a background thread; it needs speak()
-    #    so it can announce when a reminder fires.
+    # Reminder checker runs in a background thread
     start_checker(speak)
 
-    # 4. Print startup diagnostics
+    # Print startup diagnostics
     try:
         from diagnostics import check_environment, print_report
         report = check_environment()
@@ -483,11 +551,10 @@ def main() -> None:
     except Exception as exc:
         logger.warning("Startup diagnostics failed: %s", exc)
 
-    # 5. Load ASR models and run the wake/listen loop.
+    # Load ASR models
     wake_model, command_model = _load_models()
 
-    # 6. Warm the LLM + piper voice in the background so the first
-    #    spoken response doesn't pay cold-start costs.
+    # Warm the LLM + piper voice in the background
     def _warmup():
         try:
             t0 = time.perf_counter()
@@ -511,14 +578,33 @@ def main() -> None:
     print("\nJARVIS READY")
 
     while True:
-        wait_for_wake_word(wake_model)
+        wake_stt_time = wait_for_wake_word(wake_model)
+        
         while True:
-            user = listen_command(command_model)
+            profiler = LatencyProfiler()
+            profiler.timings["Wake"] = wake_stt_time
+            profiler.start("Total")
+            
+            user, rec_time, stt_time = listen_command(command_model)
+            profiler.timings["Recording"] = rec_time
+            profiler.timings["STT"] = stt_time
+            
             print("\nYou said:", user)
             if not user:
                 continue
 
-            # Sleep / goodbye
+            cleaned_user = user.lower().strip().rstrip(".").strip()
+            if cleaned_user in ["stop", "wait", "jarvis", "hold on", "actually", "pause"]:
+                logger.info("Interruption keyword '%s' detected. Halting and listening.", cleaned_user)
+                stop_sound()
+                try:
+                    from jarvis.speech.piper_rt import get_speaker
+                    get_speaker(VOICE).stop()
+                except Exception:
+                    pass
+                speak("Listening, sir.")
+                continue
+
             user_lower = user.lower()
             if (
                 "go to sleep" in user_lower
@@ -526,53 +612,71 @@ def main() -> None:
                 or "bye jarvis" in user_lower
                 or "thank you bye" in user_lower
             ):
+                profiler.start("TTS")
                 speak("Goodbye sir. Entering standby mode.")
+                profiler.stop("TTS")
+                profiler.stop("Total")
+                profiler.log_report()
                 break
 
-            t0 = time.perf_counter()
+            profiler.start("Intent")
             fast_result = fast_router.route(user)
-            t_route = time.perf_counter()
-            print(f"[TIMING] Fast Router: {t_route - t0:.3f}s")
+            profiler.stop("Intent")
 
             if fast_result:
                 print("FAST ROUTER RESULT:", fast_result)
+                profiler.start("TTS")
                 speak(fast_result)
+                profiler.stop("TTS")
+                profiler.stop("Total")
+                profiler.log_report()
                 continue
 
-            # Regex-only planning (sub-ms). The LLM classify path costs
-            # 2-9 s of sequential model calls, which blows the 3 s budget.
+            profiler.start("Intent")
             plan = plan_action(user, use_llm=False)
-            t_plan = time.perf_counter()
-            print(f"[TIMING] Planner: {t_plan - t_route:.3f}s")
+            profiler.stop("Intent")
             print("PLAN:", plan)
 
-            # Streaming chat: speak the first sentence while the LLM keeps
-            # generating instead of waiting for the full response + full TTS.
             if plan.get("action") == "ai_chat":
                 if plan.get("_direct_text"):
+                    profiler.start("TTS")
                     speak(plan.get("text"))
+                    profiler.stop("TTS")
                 else:
                     print("STREAMING AI CHAT")
-                    _stream_chat_and_speak(user)
+                    _stream_chat_and_speak(user, profiler)
+                profiler.stop("Total")
+                profiler.log_report()
                 continue
 
             try:
+                profiler.start("Memory")
+                # Time the executor as Memory phase if it targets memory, otherwise it's just executor work
+                is_mem = plan.get("action", "").startswith("memory")
+                if not is_mem:
+                    profiler.stop("Memory")
+                
                 result = execute_plan(plan)
+                
+                if is_mem:
+                    profiler.stop("Memory")
             except Exception as exc2:
                 logger.exception("execute_plan crashed")
                 speak(f"Something went wrong, sir. {exc2}")
                 continue
 
-            t_exec = time.perf_counter()
-            print(f"[TIMING] Executor: {t_exec - t_plan:.3f}s")
             print("RESULT:", result)
             if result:
+                profiler.start("TTS")
                 speak(result)
+                profiler.stop("TTS")
+                
+            profiler.stop("Total")
+            profiler.log_report()
 
 
-def _stream_chat_and_speak(text: str) -> None:
+def _stream_chat_and_speak(text: str, profiler: Optional[LatencyProfiler] = None) -> None:
     """Stream the LLM response and speak each sentence as it completes."""
-    import re
     from jarvis.speech.piper_rt import get_speaker
 
     speaker = get_speaker(VOICE)
@@ -581,31 +685,39 @@ def _stream_chat_and_speak(text: str) -> None:
     printed = ""
     first_frag_at = None
 
-    # Flush as soon as we have a complete sentence OR ~22 chars of a
-    # long first sentence, so the first audio starts right after TTFB.
-    _FLUSH_RE = re.compile(r".*[.!?]\s*$", re.S)
-
-    def _flush():
-        nonlocal buffer
-        if buffer.strip() and re.search(r"[a-zA-Z0-9]", buffer):
-            speaker.feed(buffer)
-        buffer = ""
-
     for frag in chat_stream_ollama(text):
         if frag is None:
             continue
         if first_frag_at is None:
             first_frag_at = time.perf_counter()
+            if profiler:
+                profiler.timings["LLM"] = (first_frag_at - t0) * 1000.0
             print(f"[TIMING] LLM first content: {(first_frag_at - t0) * 1000:.0f} ms")
         printed += frag
         buffer += frag
-        # Sentence boundary, OR a long fragment ending at a word boundary
-        # (split only on whitespace so piper never receives half a word).
-        if _FLUSH_RE.match(buffer) or (
-            len(buffer) >= 22 and buffer.endswith((" ", "\n"))
-        ):
-            _flush()
-    _flush()
+        
+        # Sentence boundary detection
+        matches = list(re.finditer(r'[^.!?]*?[.!?](?:\s+|$)', buffer))
+        if matches:
+            last_match = matches[-1]
+            end_idx = last_match.end()
+            sentence = buffer[:end_idx].strip()
+            buffer = buffer[end_idx:]
+            if sentence:
+                t_tts = time.perf_counter()
+                speaker.feed(sentence)
+                if profiler and "TTS" not in profiler.timings:
+                    profiler.timings["TTS"] = (time.perf_counter() - t_tts) * 1000.0
+                    # For playback, capture how long after first token audio starts
+                    sp = get_speaker(VOICE)
+                    if sp._last_play_start > first_frag_at:
+                        profiler.timings["Playback"] = (sp._last_play_start - first_frag_at) * 1000.0
+                    else:
+                        profiler.timings["Playback"] = 25.0 # default playback thread spin timing fallback
+
+    if buffer.strip():
+        speaker.feed(buffer.strip())
+        
     print(f"\nJARVIS: {printed}")
 
 
@@ -620,3 +732,4 @@ if __name__ == "__main__":
             speak(f"Critical error, sir. {exc}")
         except Exception:
             pass
+

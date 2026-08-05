@@ -25,6 +25,8 @@ from jarvis.execution.tracker import ExecutionTracker
 from jarvis.execution.scheduler import TaskScheduler
 from jarvis.interfaces.events import SystemEvent, EventPriority
 from jarvis.types import ServiceHealth
+from jarvis.telemetry import LatencyCollector
+from jarvis.memory.project_state import ProjectStateMemory
 
 logger = logging.getLogger("jarvis.app")
 
@@ -53,10 +55,14 @@ class JarvisApplication:
     def _register_core_services(self) -> None:
         from jarvis.services.config import ConfigService
         from jarvis.services.logging import LoggingService
+        from jarvis.services.identity import IdentityManager
+        from jarvis.services.response_engine import DynamicResponseEngine
 
         cfg = ConfigService(path=self._config_path)
         self._container.register_instance(ConfigService, cfg)
         self._container.register_instance(LoggingService, LoggingService())
+        self._container.register_instance(IdentityManager, IdentityManager())
+        self._container.register_instance(DynamicResponseEngine, DynamicResponseEngine())
 
     def initialize(self) -> None:
         self._start_time = time.time()
@@ -95,9 +101,27 @@ class JarvisApplication:
         register_build_handler(self._job_service, pipeline=self._build_pipeline)
         register_opencode_handler(self._job_service, event_bus=self._event_bus, workspace_manager=self._workspace_manager)
 
+        # Phase 11: project-state memory — bridges job store + workspace manager
+        self._project_memory = ProjectStateMemory(
+            job_service=self._job_service,
+            workspace_manager=self._workspace_manager,
+        )
+
+        # Phase 12: latency telemetry singleton
+        self._telemetry = LatencyCollector.instance()
+
+        # Wire event subscribers
+        from jarvis.eventbus.subscribers import TelemetrySubscriber, SystemLogSubscriber
+        self._telemetry_sub = TelemetrySubscriber()
+        self._syslog_sub = SystemLogSubscriber()
+        self._event_bus.subscribe_all(self._telemetry_sub.handle_event)
+        self._event_bus.register_subscriber(self._syslog_sub)
+
         self._container.register_instance(JobService, self._job_service)
         self._container.register_instance(WorkspaceManager, self._workspace_manager)
         self._container.register_instance(BuildPipeline, self._build_pipeline)
+        self._container.register_instance(ProjectStateMemory, self._project_memory)
+        self._container.register_instance(LatencyCollector, self._telemetry)
         self._logger.info("Job system registered: %s kinds", len(self._job_queue._handlers))
 
     def _register_handlers(self) -> None:
@@ -130,8 +154,17 @@ class JarvisApplication:
         from faster_whisper import WhisperModel
 
         self._logger.info("Loading ASR models...")
-        wake_model = WhisperModel("tiny", device="cpu", compute_type="int8")
-        cmd_model = WhisperModel("base", device="cpu", compute_type="int8")
+        wake_model_size = cfg.get("models.stt_wake_model", "tiny")
+        cmd_model_size = cfg.get("models.stt_command_model", "distil-whisper/distil-small.en")
+        self._logger.info("Wake model: %s  Command model: %s", wake_model_size, cmd_model_size)
+        try:
+            wake_model = WhisperModel(wake_model_size, device="cpu", compute_type="int8")
+            cmd_model = WhisperModel(cmd_model_size, device="cpu", compute_type="int8")
+        except Exception as exc:
+            self._logger.warning(
+                "Could not load distil model (%s), falling back to 'base': %s", cmd_model_size, exc
+            )
+            cmd_model = WhisperModel("base", device="cpu", compute_type="int8")
         self._logger.info("Models loaded.")
 
         from jarvis.execution.adapter import quick_plan, execute_via_engine
@@ -139,14 +172,20 @@ class JarvisApplication:
         fs = 16000
         phrases = cfg.get("voice.wake_phrases", ["i'm back"])
 
+        tel = getattr(self, "_telemetry", None) or LatencyCollector.instance()
+        proj_mem = getattr(self, "_project_memory", None)
+
         while self._running:
             try:
                 self._logger.info("Sleeping... Say: %s", phrases[0])
                 while self._running:
+                    tel.start_turn()
+                    tel.start_stage("wake")
                     rec = sd.rec(int(2 * fs), samplerate=fs, channels=1, dtype="int16")
                     sd.wait()
                     write_wav("wake.wav", fs, rec)
                     segs, _ = wake_model.transcribe("wake.wav", language="en")
+                    tel.end_stage("wake")
                     text = " ".join(s.text for s in segs).lower().strip()
                     if text:
                         self._logger.info("Heard: %s", text)
@@ -156,19 +195,54 @@ class JarvisApplication:
                         break
 
                 while self._running:
+                    tel.start_stage("recording")
                     user = self._capture_command(cmd_model)
+                    tel.end_stage("recording")
                     if not user:
                         continue
                     self._event_bus.publish(SystemEvent(type=COMMAND_RECEIVED, source="app", data={"text": user}))
+
+                    cleaned_user = user.lower().strip().rstrip(".").strip()
+                    if cleaned_user in ["stop", "wait", "jarvis", "hold on", "actually", "pause"]:
+                        self._logger.info("Interruption keyword '%s' detected. Halting and listening.", cleaned_user)
+                        stop_sound()
+                        try:
+                            from jarvis.speech.piper_rt import get_speaker as _gs
+                            _gs(voice).stop()
+                        except Exception:
+                            pass
+                        self._tts(piper, voice, "Listening, sir.")
+                        continue
+
                     if any(p in user.lower() for p in ("go to sleep", "goodbye", "bye jarvis")):
                         self._tts(piper, voice, "Goodbye sir.")
+                        tel.finish_turn({"action": "sleep"})
                         break
+
+                    # Phase 11: memory context injection
+                    mem_ctx = proj_mem.build_context_block() if proj_mem else ""
+
                     self._event_bus.publish(SystemEvent(type=PLANNING_STARTED, source="app", data={"text": user}))
-                    plan = quick_plan(user)
-                    result = execute_via_engine(self._engine, plan, user) if plan else "I could not understand, sir."
+                    with tel.measure("intent"):
+                        plan = quick_plan(user)
+                    from jarvis.eventbus.events import IntentRecognized
+                    self._event_bus.publish(SystemEvent(type=IntentRecognized, source="planner", data={"plan": plan}))
+
+                    with tel.measure("llm"):
+                        result = execute_via_engine(self._engine, plan, user) if plan else "I could not understand, sir."
+
+                    # Deduplicate: skip identical back-to-back responses
+                    if proj_mem and proj_mem.is_duplicate_response(result):
+                        self._logger.info("Skipping duplicate response.")
+                        tel.finish_turn({"action": plan.get("action") if plan else "unknown"})
+                        continue
+
                     self._event_bus.publish(SystemEvent(type=PLANNING_COMPLETE, source="app", data={"result": result[:200]}))
                     if result and self._running:
-                        self._tts(piper, voice, result)
+                        with tel.measure("tts"):
+                            self._tts(piper, voice, result)
+
+                    tel.finish_turn({"action": plan.get("action") if plan else "unknown", "mem_ctx": bool(mem_ctx)})
             except KeyboardInterrupt:
                 raise
             except Exception as exc:
@@ -176,42 +250,77 @@ class JarvisApplication:
                 self._logger.exception("Main loop error")
 
     def _capture_command(self, model) -> str:
-        # Interrupt currently playing sound when capturing new command
-        stop_sound()
+        from jarvis.speech.piper_rt import get_speaker
+        from jarvis.services.config import ConfigService
+        cfg = self._container.resolve(ConfigService)
+        voice = cfg.get("paths.voice_model")
+
         import sounddevice as sd
         import numpy as np
         from scipy.io.wavfile import write as write_wav
         fs = 16000
-        chunk = int(fs * 0.2)
-        chunks = []
-        silent = 0
+        chunk_frames = int(fs * 0.1)
+        chunks: list[np.ndarray] = []
         started = False
-        max_wait = 30
+        silent_chunks = 0
         waited = 0
+        max_wait = 30.0
+        max_chunks = int(max_wait / 0.1)
+        threshold = 0.02
 
-        def cb(indata, frames, time_info, status):
-            nonlocal silent, started, waited
-            vol = np.linalg.norm(indata) / np.sqrt(len(indata))
-            if vol > 0.02:
-                if not started:
-                    started = True
-                silent = 0
-                waited = 0
-                chunks.append(indata.copy())
-            elif started:
-                silent += 1
-                waited += 1
-                chunks.append(indata.copy())
+        import queue as _queue
+        q = _queue.Queue(maxsize=128)
 
-        with sd.InputStream(samplerate=fs, channels=1, dtype="float32", callback=cb, blocksize=chunk):
-            while not started or silent < int(1.5 / 0.2):
-                sd.sleep(100)
+        def _cb(indata, frames, time_info, status):
+            vol = float(np.linalg.norm(indata) / np.sqrt(len(indata)))
+            try:
+                q.put_nowait((vol, indata.copy()))
+            except _queue.QueueFull:
+                pass
+
+        with sd.InputStream(samplerate=fs, channels=1, dtype="float32", callback=_cb, blocksize=chunk_frames):
+            while True:
+                try:
+                    vol, data = q.get(timeout=0.1)
+                except _queue.Empty:
+                    continue
+                
                 waited += 1
-                if waited > max_wait * 10:
+                is_playing = False
+                try:
+                    sp = get_speaker(voice)
+                    is_playing = sp._synth_in_flight() or not sp._audio_q.empty()
+                except Exception:
+                    pass
+
+                current_threshold = threshold * 1.5 if is_playing else threshold
+
+                if vol > current_threshold:
+                    if is_playing:
+                        self._logger.info("Interruption detected. Stopping playback.")
+                        stop_sound()
+                        try:
+                            get_speaker(voice).stop()
+                        except Exception:
+                            pass
+                        from jarvis.eventbus.events import PlaybackInterrupted
+                        self._event_bus.publish(SystemEvent(type=PlaybackInterrupted, source="voice"))
+                    if not started:
+                        started = True
+                    chunks.append(data)
+                    silent_chunks = 0
+                elif started:
+                    chunks.append(data)
+                    silent_chunks += 1
+                    if silent_chunks >= 6:  # 0.6 s of trailing silence
+                        break
+                if not started and waited >= max_chunks:
                     break
 
         if not chunks:
             return ""
+        
+        # Save to wav format using numpy directly to avoid disk write if possible, but keep compatibility
         write_wav("command.wav", fs, (np.concatenate(chunks) * 32767).astype(np.int16))
         try:
             segs, _ = model.transcribe("command.wav", language="en")
@@ -221,34 +330,33 @@ class JarvisApplication:
         return " ".join(s.text for s in segs).strip()
 
     def _tts(self, piper: str, voice: str, text: str) -> None:
-        import subprocess
         self._logger.info("JARVIS: %s", text)
-        if not piper or not voice or not text:
+        if not text:
             return
         clean = text.encode("ascii", errors="ignore").decode().strip()
         if not clean:
             return
-        
-        # Use unique filename
-        wav_filename = f"response_{int(time.time() * 1000)}.wav"
+        from jarvis.speech.piper_rt import get_speaker
         try:
-            r = subprocess.run(
-                [piper, "-m", voice, "-f", wav_filename],
-                input=clean, text=True, capture_output=True, timeout=30,
-            )
-        except subprocess.TimeoutExpired:
-            self._logger.warning("TTS timed out")
-            return
+            sp = get_speaker(voice)
+            from jarvis.eventbus.events import SpeechStarted, SpeechFinished
+            self._event_bus.publish(SystemEvent(type=SpeechStarted, source="voice", data={"text": clean}))
+            sp.speak(clean, blocking=True)
+            self._event_bus.publish(SystemEvent(type=SpeechFinished, source="voice", data={"text": clean}))
         except Exception as exc:
-            self._logger.warning("TTS subprocess failed: %s", exc)
-            return
-        if r.returncode != 0:
-            self._logger.warning("TTS error: %s", r.stderr.decode(errors="ignore"))
-            return
-
-        # Play and block until audio finishes — prevents TTS cutoff
-        play_wav_async(wav_filename)
-        wait_for_playback()
+            self._logger.warning("In-process TTS failed, falling back to subprocess: %s", exc)
+            # Fallback
+            import subprocess
+            wav_filename = f"response_{int(time.time() * 1000)}.wav"
+            try:
+                subprocess.run(
+                    [piper, "-m", voice, "-f", wav_filename],
+                    input=clean, text=True, capture_output=True, timeout=30,
+                )
+                play_wav_async(wav_filename)
+                wait_for_playback()
+            except Exception:
+                self._logger.exception("Fallback TTS failed")
 
     def run_api_server(self, host: str = "127.0.0.1", port: int = 8000) -> None:
         """Start JARVIS in API server mode using FastAPI + uvicorn."""
@@ -292,19 +400,38 @@ class JarvisApplication:
         from jarvis.execution.adapter import execute_via_engine
         return execute_via_engine(self._engine, plan, "")
 
-    def chat_with_llm(self, text: str, history: Optional[list] = None) -> str:
-        import ollama
+    def chat_with_llm(self, text: str, history: Optional[list] = None, speaker=None) -> str:
         from jarvis.services.config import ConfigService
         cfg = self._container.resolve(ConfigService)
         model = cfg.get("models.chat_model", "qwen3.5:4b")
         sp = cfg.get("system.system_prompt", "You are JARVIS.")
+
+        # Phase 11: inject project-state memory block into system prompt
+        proj_mem = getattr(self, "_project_memory", None)
+        if proj_mem:
+            ctx = proj_mem.build_context_block()
+            if ctx:
+                sp = sp + "\n\n" + ctx
+
         msgs = [{"role": "system", "content": sp}]
         if history:
             msgs.extend(history[-20:])
         msgs.append({"role": "user", "content": text})
+
+        # Streaming path: feed tokens into TTS speaker sentence-by-sentence
+        if speaker is not None:
+            try:
+                from jarvis.speech.streaming_llm import stream_response_to_speaker
+                return stream_response_to_speaker(text, model, msgs, speaker)
+            except Exception as exc:
+                self._logger.warning("LLM streaming failed, falling back to sync: %s", exc)
+
+        # Non-streaming fallback (headless / API mode)
         try:
             from jarvis.planner.llm import _get_client
-            return _get_client().chat(model=model, messages=msgs, think=False)["message"]["content"]
+            return _get_client().chat(model=model, messages=msgs, think=False, keep_alive=-1).get(
+                "message", {}
+            ).get("content", "")
         except Exception as exc:
             self._logger.warning("LLM chat failed: %s", exc)
             return "I am having trouble reaching the language model, sir."

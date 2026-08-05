@@ -40,11 +40,6 @@ import numpy as np
 
 logger = logging.getLogger("jarvis.speech.piper_rt")
 
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\s+(?=[.!?])")
-
-# Silence threshold below which a synthesized chunk is pure silence
-_NOISE_FLOOR = 1.0 / 32768.0 * 2.0
-
 
 def _split_sentences(text: str):
     """Split text into speakable fragments (sentences/clauses).
@@ -52,21 +47,26 @@ def _split_sentences(text: str):
     Splits on sentence boundaries so we can start speaking the first clause
     almost immediately instead of waiting for the full response.
     """
-    cleaned = re.sub(r"\s+", " ", text).strip()
-    if not cleaned:
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
         return []
-    parts = _SENTENCE_SPLIT_RE.split(cleaned)
+    # Split by punctuation followed by space, but keep the punctuation
+    sentences = re.split(r'(?<=[.!?])\s+', text)
     out = []
     buf = ""
-    for p in parts:
-        buf += p
-        if buf.endswith((".", "!", "?", ":", ";")) or len(buf) >= 26:
-            if buf:
-                out.append(buf.strip())
+    for s in sentences:
+        buf += (" " if buf else "") + s
+        # Split long sentences or when we hit a logical break
+        if len(buf) > 100 or any(c in buf for c in ".!?"):
+            out.append(buf)
             buf = ""
     if buf:
-        out.append(buf.strip())
-    return [s for s in out if s]
+        out.append(buf)
+    return out
+
+
+# Silence threshold below which a synthesized chunk is considered pure silence.
+_NOISE_FLOOR = 1.0 / 32768.0 * 2.0
 
 
 def _has_audio(samples: np.ndarray) -> bool:
@@ -116,13 +116,16 @@ class PiperEngine:
 
 
 class StreamingSpeaker:
-    """Queue-based playback loop with gapless sentence streaming."""
+    """Queue-based playback loop with gapless sentence streaming and background synthesis."""
 
     def __init__(self, engine: PiperEngine):
         self._engine = engine
         self._audio_q: "queue.Queue[np.ndarray]" = queue.Queue()
+        self._text_q: "queue.Queue[str]" = queue.Queue()
         self._play_thread: Optional[threading.Thread] = None
+        self._synth_thread: Optional[threading.Thread] = None
         self._play_lock = threading.Lock()
+        self._synth_lock = threading.Lock()
         self._running = False
         self._stop_event = threading.Event()
         self._last_play_finish: float = time.monotonic()
@@ -131,20 +134,20 @@ class StreamingSpeaker:
     # -- public API ------------------------------------------------------
 
     def feed(self, text: str) -> int:
-        """Synthesize *text* in the calling thread and enqueue audio.
+        """Enqueue *text* to be synthesized in a background thread.
 
         Splits into sentences so the first one can reach the speaker ASAP.
-        Returns the number of audio chunks enqueued.
+        Returns the number of sentences enqueued.
         """
         sentences = _split_sentences(text)
         enqueued = 0
         for sent in sentences:
-            samples = self._engine.synthesize(sent)
-            if samples is not None and len(samples) > 0:
-                self._audio_q.put(samples)
-                enqueued += 1
-        if enqueued and not self._ensure_player():
-            logger.warning("Could not start playback for %.60r", text)
+            self._text_q.put(sent)
+            enqueued += 1
+        if enqueued:
+            self._ensure_synth_thread()
+            if not self._ensure_player():
+                logger.warning("Could not start playback for %.60r", text)
         return enqueued
 
     def speak(self, text: str, blocking: bool = False) -> None:
@@ -157,7 +160,7 @@ class StreamingSpeaker:
 
     def feed_async(self, text: str) -> None:
         """Synthesize *text* on a background thread and enqueue audio."""
-        threading.Thread(target=self.feed, args=(text,), daemon=True).start()
+        self.feed(text)
 
     def wait_until_done(self, timeout: float = 60.0) -> None:
         """Block until all queued audio has been played out.
@@ -168,7 +171,7 @@ class StreamingSpeaker:
         """
         t0 = time.monotonic()
         while time.monotonic() - t0 < timeout:
-            if self._audio_q.empty():
+            if self._audio_q.empty() and self._text_q.empty():
                 if time.monotonic() - self._last_play_finish > 0.4:
                     return
             time.sleep(0.03)
@@ -183,6 +186,13 @@ class StreamingSpeaker:
         except Exception:
             pass
         self._last_play_finish = time.monotonic()
+        
+        # Clear both text and audio queues
+        while not self._text_q.empty():
+            try:
+                self._text_q.get_nowait()
+            except queue.Empty:
+                break
         while not self._audio_q.empty():
             try:
                 self._audio_q.get_nowait()
@@ -200,12 +210,13 @@ class StreamingSpeaker:
             pass
         self._running = False
         self._play_thread = None
+        self._synth_thread = None
         self._last_play_finish = time.monotonic()
 
     # -- internals -------------------------------------------------------
 
     def _synth_in_flight(self) -> bool:
-        return False
+        return not self._text_q.empty()
 
     def _ensure_player(self) -> bool:
         with self._play_lock:
@@ -219,6 +230,28 @@ class StreamingSpeaker:
             )
             self._play_thread.start()
             return True
+
+    def _ensure_synth_thread(self) -> None:
+        with self._synth_lock:
+            if self._synth_thread is not None and self._synth_thread.is_alive():
+                return
+            self._running = True
+            self._synth_thread = threading.Thread(
+                target=self._synth_loop, daemon=True, name="piper-synthesizer"
+            )
+            self._synth_thread.start()
+
+    def _synth_loop(self) -> None:
+        while self._running:
+            try:
+                sent = self._text_q.get(timeout=0.15)
+            except queue.Empty:
+                continue
+            if self._stop_event.is_set():
+                continue
+            samples = self._engine.synthesize(sent)
+            if samples is not None and len(samples) > 0:
+                self._audio_q.put(samples)
 
     def _play_loop(self) -> None:
         import sounddevice as sd

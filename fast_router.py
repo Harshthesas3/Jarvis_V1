@@ -83,6 +83,10 @@ class FastCommandRouter:
         if re.search(r"\b(show(?: the)? desktop|minimize all(?: windows)?)\b", clean):
             return self._show_desktop()
 
+        # 9. Background project builds (never blocks the voice loop)
+        if re.search(r"^(?:please\s+)?(?:build|create|make|develop|generate)\s+", clean):
+            return self._build_project(clean)
+
         return None
 
     # ------------------------------------------------------------------
@@ -233,4 +237,12 @@ class FastCommandRouter:
         except Exception as e:
             logger.error("Show desktop failed: %s", e)
             return "I couldn't show the desktop, sir."
+
+    def _build_project(self, text: str) -> str:
+        try:
+            from jarvis.bridge.voice import submit_build_request
+            return submit_build_request(text)
+        except Exception as e:  # noqa: BLE001
+            logger.error("Build project failed: %s", e)
+            return "I couldn't start that build, sir."
 
