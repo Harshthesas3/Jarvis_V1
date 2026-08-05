@@ -11,49 +11,55 @@ and returns a TTS-ready string. Conversational fallbacks go through
 
 import json
 import logging
-import ollama
 import os
 import subprocess
 import sys
+import threading
 import time
-import sounddevice as sd
-from faster_whisper import WhisperModel
-from scipy.io.wavfile import write
 from settings_manager import settings
 from plugins import PluginManager
 from plugins.agents import get_orchestrator
-from memory_v2 import get_memory
 
 # Add src folder to sys.path to resolve internal jarvis packages
 src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
-from jarvis.speech.playback import play_wav_async, stop_sound
+from jarvis.speech.playback import stop_sound
 
 
 from reminders import start_checker
 from planner import plan_action, execute_plan
 from task_executor import set_executor_context, register_default_handlers
-import memory_v2
 from fast_router import FastCommandRouter
-from jarvis.speech.playback import wait_for_playback
 
 # For backward compatibility, create a wrapper for the old memory API
 class LegacyMemoryWrapper:
-    def __init__(self, memory_module):
+    def __init__(self, memory_module=None):
         self._memory = memory_module
-    
+        self._load_error = None
+
+    def _get(self):
+        if self._memory is None:
+            try:
+                from memory_v2 import get_memory
+                self._memory = get_memory()
+            except Exception as exc:  # noqa: BLE001
+                self._load_error = exc
+        return self._memory
+
     def load(self) -> dict:
-        """Backward compatibility wrapper."""
-        return self._memory.load()
-    
+        """Backward compatibility wrapper (lazy: memory_v2 is expensive to import)."""
+        mem = self._get()
+        if mem is None:
+            return {"facts": []}
+        return mem.load()
+
     def save(self, data: dict) -> None:
         """Backward compatibility wrapper."""
-        return self._memory.save(data)
-
-# Create legacy wrapper
-memory_mod = LegacyMemoryWrapper(memory_v2.get_memory())
+        mem = self._get()
+        if mem is not None:
+            return mem.save(data)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -105,13 +111,17 @@ CHAT_HISTORY_LIMIT = settings.get("voice.chat_history_limit", 10)
 _facts_cache: tuple = (0.0, "")  # (timestamp, cached_prompt)
 _FACTS_CACHE_TTL = 5.0  # seconds
 
+# Created lazily; holds the *lazy* wrapper so the heavy memory_v2 module
+# (faiss / sentence-transformers imports) does not block startup.
+memory_mod = LegacyMemoryWrapper()
+
 
 def _build_system_prompt() -> str:
     global _facts_cache
     now = time.time()
     if now - _facts_cache[0] < _FACTS_CACHE_TTL:
         return _facts_cache[1]
-    
+
     facts = memory_mod.load().get("facts", [])
     if not facts:
         result = SYSTEM_PROMPT
@@ -126,10 +136,15 @@ def _build_system_prompt() -> str:
     return result
 
 
+_LLM_KWARGS = {"keep_alive": -1, "think": False}
+
+
 def chat_with_ollama(text: str) -> str:
     """Send `text` to the local chat model, keeping a rolling history of
     the last 10 user/assistant turns and injecting the persistent fact
     store into the system prompt on every call."""
+    import ollama
+
     if not text or not text.strip():
         return ""
 
@@ -139,8 +154,18 @@ def chat_with_ollama(text: str) -> str:
 
     messages = [{"role": "system", "content": _build_system_prompt()}] + chat_history
     try:
-        response = ollama.chat(model=CHAT_MODEL, messages=messages)
-        reply = response["message"]["content"]
+        stream = ollama.chat(
+            model=CHAT_MODEL,
+            messages=messages,
+            stream=True,
+            options={"num_predict": 150},
+            **_LLM_KWARGS,
+        )
+        reply = "".join(
+            chunk.get("message", {}).get("content", "")
+            for chunk in stream
+            if chunk.get("message", {}).get("content")
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("chat_with_ollama failed: %s", exc)
         reply = "I am having trouble reaching the language model, sir."
@@ -148,48 +173,116 @@ def chat_with_ollama(text: str) -> str:
     chat_history.append({"role": "assistant", "content": reply})
     return reply
 
+
+def chat_stream_ollama(text: str, on_text=None):
+    """Stream a chat response from the local model.
+
+    Yields content fragments as they arrive (thinking disabled, model pinned
+    in memory). ``on_text`` is called with each fragment; the caller can feed
+    TTS incrementally so speech overlaps generation.
+    """
+    import ollama
+
+    if not text or not text.strip():
+        return
+
+    chat_history.append({"role": "user", "content": text})
+    if len(chat_history) > CHAT_HISTORY_LIMIT * 2:
+        chat_history[:] = chat_history[-CHAT_HISTORY_LIMIT * 2:]
+
+    messages = [{"role": "system", "content": _build_system_prompt()}] + chat_history
+    reply_parts: list[str] = []
+    try:
+        stream = ollama.chat(
+            model=CHAT_MODEL,
+            messages=messages,
+            stream=True,
+            options={"num_predict": 150},
+            **_LLM_KWARGS,
+        )
+        for chunk in stream:
+            frag = chunk.get("message", {}).get("content", "")
+            if not frag:
+                continue
+            reply_parts.append(frag)
+            if on_text is not None:
+                on_text(frag)
+            yield frag
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("chat_stream_ollama failed: %s", exc)
+        yield "I am having trouble reaching the language model, sir."
+    finally:
+        reply = "".join(reply_parts)
+        chat_history.append({"role": "assistant", "content": reply})
+
 # ---------------------------------------------------------------------------
 # TTS
 # ---------------------------------------------------------------------------
 def speak(text: str) -> None:
+    """Synthesize and play *text* in-process (non-blocking, gapless).
+
+    Uses :class:`jarvis.speech.piper_rt.StreamingSpeaker`, which keeps the
+    Piper ONNX voice loaded once and plays through a persistent audio queue
+    (~1 s per sentence instead of ~2.7 s per subprocess utterance).
+    """
     print(f"\nJarvis: {text}")
     if not text:
         return
     clean = text.encode("ascii", errors="ignore").decode().strip()
     if not clean:
         return
-    
-    # Use a unique filename for each TTS generation to allow concurrent file handling
-    wav_filename = f"response_{int(time.time() * 1000)}.wav"
-    t0 = time.perf_counter()
+    from jarvis.speech.piper_rt import get_speaker
+
+    speaker = get_speaker(VOICE)
+    speaker.speak(clean, blocking=False)
+
+
+def wait_until_spoken(timeout: float = 30.0) -> None:
+    """Block until the current TTS utterance finishes (compat helper)."""
+    from jarvis.speech.piper_rt import get_speaker
+
     try:
-        result = subprocess.run(
-            [PIPER, "-m", VOICE, "-f", wav_filename],
-            input=clean, text=True, capture_output=True, timeout=30,
-        )
-    except subprocess.TimeoutExpired:
-        logger.warning("TTS timed out for text: %s", clean[:50])
-        return
-    except Exception as exc:
-        logger.warning("TTS subprocess failed: %s", exc)
-        return
-    if result.returncode != 0:
-        print(result.stderr.decode(errors="ignore"))
-        return
-    t_tts = time.perf_counter()
-    print(f"[TIMING] TTS Gen: {t_tts - t0:.3f}s")
-    
-    # Play synchronously to guarantee playback before next listen
-    play_wav_async(wav_filename)
-    wait_for_playback()
+        get_speaker(VOICE).wait_until_done(timeout=timeout)
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------------------
 # Audio capture
 # ---------------------------------------------------------------------------
 import numpy as np
 
+
+def _mic_chunks(fs: int = 16000, chunk_frames: int = 1600, threshold: float = 0.02):
+    """Yield ``(volume, float32_mono_chunk)`` pairs from a persistent mic stream.
+
+    A single InputStream stays open for the whole listen session, which
+    removes the per-utterance device open/close overhead of ``sd.rec``.
+    """
+    import queue as _queue
+    import sounddevice as sd
+
+    q = _queue.Queue(maxsize=128)
+
+    def _cb(indata, frames, time_info, status):
+        vol = float(np.linalg.norm(indata) / np.sqrt(len(indata)))
+        try:
+            q.put_nowait((vol, indata.copy()))
+        except _queue.Full:
+            pass
+
+    with sd.InputStream(
+        samplerate=fs, channels=1, dtype="float32",
+        callback=_cb, blocksize=chunk_frames,
+    ) as _stream:
+        while True:
+            yield q.get()
+
+
 def record_audio(filename: str, seconds: int) -> None:
-    # Immediately interrupt any currently playing TTS
+    """Compatibility shim: fixed-length recording written to a WAV file."""
+    import sounddevice as sd
+    from scipy.io.wavfile import write
+
     stop_sound()
     fs = 16000
     try:
@@ -203,43 +296,46 @@ def record_audio(filename: str, seconds: int) -> None:
 
 
 def record_until_silence(filename: str, silence_duration: float = 1.5, threshold: float = 0.02, fs: int = 16000) -> None:
-    # Immediately interrupt any currently playing TTS
+    """Compatibility shim: capture until silence, write a WAV file."""
+    from scipy.io.wavfile import write
+
     stop_sound()
-    chunk = int(fs * 0.2)
-    audio_chunks = []
-    silent_chunks = 0
-    silence_chunk_limit = int(silence_duration / 0.2)
-    started = False
-
-    def callback(indata, frames, time_info, status):
-        nonlocal silent_chunks, started
-        volume = np.linalg.norm(indata) / np.sqrt(len(indata))
-        if volume > threshold:
-            if not started:
-                started = True
-            silent_chunks = 0
-            audio_chunks.append(indata.copy())
-        elif started:
-            silent_chunks += 1
-            audio_chunks.append(indata.copy())
-
-    with sd.InputStream(samplerate=fs, channels=1, dtype="float32", callback=callback, blocksize=chunk):
-        while not started or silent_chunks < silence_chunk_limit:
-            sd.sleep(100)
-
-    if audio_chunks:
-        recording = (np.concatenate(audio_chunks) * 32767).astype(np.int16)
-        write(filename, fs, recording)
+    chunks = _capture_command_audio(threshold=threshold, fs=fs, max_wait=30)
+    if chunks:
+        write(filename, fs, (np.concatenate(chunks) * 32767).astype(np.int16))
 
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
 def _load_models() -> tuple:
+    """Load tiny (wake) + base (command) whisper models in parallel."""
+    from concurrent.futures import ThreadPoolExecutor
+    from faster_whisper import WhisperModel
+
+    def _load(name: str):
+        return WhisperModel(name, device="cpu", compute_type="int8")
+
     print("Loading models...")
-    wake = WhisperModel("tiny", device="cpu", compute_type="int8")
-    command = WhisperModel("base", device="cpu", compute_type="int8")
-    print("Models loaded.")
+    t0 = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f1 = ex.submit(_load, "tiny")
+        f2 = ex.submit(_load, "base")
+        wake, command = f1.result(), f2.result()
+    print(f"Models loaded. ({(time.perf_counter() - t0) * 1000:.0f} ms)")
     return wake, command
+
+
+def _transcribe_numpy(model, audio: np.ndarray, *, beam_size: int = 1) -> str:
+    """Transcribe an in-memory float32 array (no disk round-trip)."""
+    segments, _ = model.transcribe(
+        audio,
+        language="en",
+        beam_size=beam_size,
+        vad_filter=True,
+        condition_on_previous_text=False,
+    )
+    return " ".join(s.text for s in segments).strip()
+
 
 # ---------------------------------------------------------------------------
 # Wake / listen
@@ -247,53 +343,98 @@ def _load_models() -> tuple:
 def wait_for_wake_word(wake_model) -> None:
     print("\nSleeping...")
     print("Say: I'm back")
+    chunk_frames = 1600  # 100 ms
+
     while True:
+        buffer: list[np.ndarray] = []
+        had_speech = False
+        silent_chunks = 0
+        speech_chunks = 0
+
+        for vol, data in _mic_chunks(chunk_frames=chunk_frames):
+            if vol > 0.02:
+                if not had_speech:
+                    had_speech = True
+                    buffer = []
+                buffer.append(data)
+                speech_chunks += 1
+                silent_chunks = 0
+            elif had_speech:
+                buffer.append(data)
+                silent_chunks += 1
+
+            # Transcribe once we have a complete short utterance:
+            # at least 400 ms of speech, then either 700 ms of silence
+            # or a hard 2.0 s cap.
+            if (
+                had_speech
+                and speech_chunks >= 4
+                and (silent_chunks >= 7 or speech_chunks >= 20)
+            ):
+                break
+
+        if not buffer:
+            continue
+
+        audio = np.concatenate(buffer)
         t0 = time.perf_counter()
-        record_audio("wake.wav", 2)
-        t_vad = time.perf_counter()
         try:
-            segments, _ = wake_model.transcribe("wake.wav", language="en")
+            text = _transcribe_numpy(wake_model, audio)
         except Exception as exc:
             logger.warning("Wake word transcription failed: %s", exc)
             continue
-        
-        text = " ".join(s.text for s in segments).lower().strip()
-        t_stt = time.perf_counter()
-        if text:
-            print("Heard:", text)
-            print(f"[TIMING] VAD: {t_vad - t0:.3f}s, STT: {t_stt - t_vad:.3f}s")
-        if any(p in text for p in WAKE_PHRASES):
+        stt_ms = (time.perf_counter() - t0) * 1000.0
+
+        text_lower = text.lower().strip()
+        if text_lower:
+            print(f"Heard: {text}  ([STT] {stt_ms:.0f} ms)")
+        if any(p in text_lower for p in WAKE_PHRASES):
             print("Wake phrase detected.")
             speak("Systems online, sir. Awaiting instructions.")
             break
-    try:
-        os.remove("wake.wav")
-    except OSError:
-        pass
+
+
+def _capture_command_audio(threshold: float = 0.02, fs: int = 16000, max_wait: float = 30.0) -> list[np.ndarray]:
+    """Record until silence, returning float32 chunks (never touches disk)."""
+    stop_sound()
+    chunk_frames = int(fs * 0.1)
+    chunks: list[np.ndarray] = []
+    started = False
+    silent_chunks = 0
+    waited = 0
+    max_chunks = int(max_wait / 0.1)
+
+    for vol, data in _mic_chunks(fs=fs, chunk_frames=chunk_frames):
+        waited += 1
+        if vol > threshold:
+            if not started:
+                started = True
+            chunks.append(data)
+            silent_chunks = 0
+        elif started:
+            chunks.append(data)
+            silent_chunks += 1
+            if silent_chunks >= 12:  # 1.2 s of trailing silence
+                break
+        if not started and waited >= max_chunks:
+            break
+    return chunks
 
 
 def listen_command(command_model) -> str:
     print("\nListening...")
-    t0 = time.perf_counter()
-    record_until_silence("command.wav")
-    t_vad = time.perf_counter()
+    chunks = _capture_command_audio()
+    if not chunks:
+        return ""
+    audio = np.concatenate(chunks)
     print("Transcribing...")
+    t0 = time.perf_counter()
     try:
-        segments, _ = command_model.transcribe("command.wav", language="en")
+        text = _transcribe_numpy(command_model, audio)
     except Exception as exc:
         logger.warning("Command transcription failed: %s", exc)
-        try:
-            os.remove("command.wav")
-        except OSError:
-            pass
         return ""
-    text = " ".join(s.text for s in segments).strip()
-    t_stt = time.perf_counter()
-    print(f"[TIMING] VAD: {t_vad - t0:.3f}s, STT: {t_stt - t_vad:.3f}s")
-    try:
-        os.remove("command.wav")
-    except OSError:
-        pass
+    print(f"[TIMING] STT: {(time.perf_counter() - t0) * 1000:.0f} ms")
     return text
 
 # ---------------------------------------------------------------------------
@@ -344,6 +485,29 @@ def main() -> None:
 
     # 5. Load ASR models and run the wake/listen loop.
     wake_model, command_model = _load_models()
+
+    # 6. Warm the LLM + piper voice in the background so the first
+    #    spoken response doesn't pay cold-start costs.
+    def _warmup():
+        try:
+            t0 = time.perf_counter()
+            for _ in chat_stream_ollama("Respond with the single word: ready.", on_text=None):
+                pass
+            logger.info("LLM warmup complete (%.0f ms)", (time.perf_counter() - t0) * 1000.0)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("LLM warmup failed: %s", exc)
+
+    def _preload_piper():
+        try:
+            from jarvis.speech.piper_rt import get_speaker
+            get_speaker(VOICE)
+            logger.info("Piper voice preloaded")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Piper preload failed: %s", exc)
+
+    threading.Thread(target=_warmup, daemon=True, name="llm-warmup").start()
+    threading.Thread(target=_preload_piper, daemon=True, name="piper-preload").start()
+
     print("\nJARVIS READY")
 
     while True:
@@ -363,30 +527,35 @@ def main() -> None:
                 or "thank you bye" in user_lower
             ):
                 speak("Goodbye sir. Entering standby mode.")
-                wait_for_playback()
                 break
 
             t0 = time.perf_counter()
             fast_result = fast_router.route(user)
             t_route = time.perf_counter()
             print(f"[TIMING] Fast Router: {t_route - t0:.3f}s")
-            
+
             if fast_result:
                 print("FAST ROUTER RESULT:", fast_result)
                 speak(fast_result)
-                wait_for_playback()
                 continue
-                
+
             plan = plan_action(user)
             t_plan = time.perf_counter()
             print(f"[TIMING] Planner: {t_plan - t_route:.3f}s")
             print("PLAN:", plan)
+
+            # Streaming chat: speak the first sentence while the LLM keeps
+            # generating instead of waiting for the full response + full TTS.
+            if plan.get("action") == "ai_chat":
+                print("STREAMING AI CHAT")
+                _stream_chat_and_speak(plan.get("text", user))
+                continue
+
             try:
                 result = execute_plan(plan)
             except Exception as exc2:
                 logger.exception("execute_plan crashed")
                 speak(f"Something went wrong, sir. {exc2}")
-                wait_for_playback()
                 continue
 
             t_exec = time.perf_counter()
@@ -394,9 +563,35 @@ def main() -> None:
             print("RESULT:", result)
             if result:
                 speak(result)
-                t_tts = time.perf_counter()
-                print(f"[TIMING] TTS Init: {t_tts - t_exec:.3f}s")
-                wait_for_playback()
+
+
+def _stream_chat_and_speak(text: str) -> None:
+    """Stream the LLM response and speak each sentence as it completes."""
+    import re
+    from jarvis.speech.piper_rt import get_speaker
+
+    speaker = get_speaker(VOICE)
+    buffer = ""
+    t0 = time.perf_counter()
+    printed = ""
+
+    _FLUSH_RE = re.compile(r".*[.!?]\s*$", re.S)
+
+    def _flush():
+        nonlocal buffer
+        if buffer.strip():
+            speaker.feed(buffer)
+            buffer = ""
+
+    for frag in chat_stream_ollama(text):
+        if frag is None:
+            continue
+        printed += frag
+        buffer += frag
+        if _FLUSH_RE.match(buffer):
+            _flush()
+    _flush()
+    print(f"\nJARVIS: {printed}")
 
 
 if __name__ == "__main__":

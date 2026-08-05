@@ -278,7 +278,13 @@ def _ollama_chat_with_retry(
     for attempt in range(_MAX_LLM_RETRIES + 1):
         try:
             start = time.monotonic()
-            resp = _get_ollama_client().chat(model=model, messages=messages, options=options)
+            resp = _get_ollama_client().chat(
+                model=model,
+                messages=messages,
+                options=options,
+                think=False,     # qwen3.x streams ~300+ chars of 'thinking' first
+                keep_alive=-1,   # pin the model in memory: ~1.3s reload per call otherwise
+            )
             elapsed = (time.monotonic() - start) * 1000.0
             _METRICS.record_llm_call(elapsed)
 
@@ -1919,9 +1925,21 @@ Output ONLY the JSON. No prose, no markdown, no actions.
 """
 
 
+# LRU-ish intent cache: voice commands repeat often; classify each unique
+# phrase once and reuse it (skips a ~1.5 s LLM round trip per repeat).
+_intent_cache: dict = {}
+_INTENT_CACHE_MAX = 128
+
+
 def _classify_intent(user_text: str) -> Optional[dict]:
     """Classify user intent. Returns {"intent", "goal", "confidence", "required_capabilities"}
     or None if classification fails. NEVER generates actions."""
+    key = user_text.strip().lower()
+    cached = _intent_cache.get(key)
+    if cached is not None:
+        logger.debug("Intent cache hit: %s", key[:60])
+        return cached
+
     resp = _ollama_chat_with_retry(
         model=_get_planner_model(),
         messages=[
@@ -1938,6 +1956,9 @@ def _classify_intent(user_text: str) -> Optional[dict]:
         raw = resp["message"]["content"]
         parsed = _extract_json(raw)
         if parsed and isinstance(parsed, dict) and "intent" in parsed:
+            if len(_intent_cache) >= _INTENT_CACHE_MAX:
+                _intent_cache.clear()
+            _intent_cache[key] = parsed
             return parsed
         logger.warning("Intent classification returned invalid JSON: %.200s", raw)
         return None
