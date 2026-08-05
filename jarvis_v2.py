@@ -370,6 +370,8 @@ def _load_models() -> tuple:
 
 def _transcribe_numpy(model, audio: np.ndarray, *, beam_size: int = 1) -> str:
     """Transcribe an in-memory float32 array (no disk round-trip)."""
+    if audio.ndim > 1:
+        audio = audio.squeeze()
     segments, _ = model.transcribe(
         audio,
         language="en",
