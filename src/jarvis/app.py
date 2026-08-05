@@ -41,6 +41,9 @@ class JarvisApplication:
         self._engine: Optional[GraphExecutionEngine] = None
         self._tracker: Optional[ExecutionTracker] = None
         self._scheduler: Optional[TaskScheduler] = None
+        self._job_service: Optional[Any] = None
+        self._workspace_manager: Optional[Any] = None
+        self._build_pipeline: Optional[Any] = None
         self._config_path = config_path
         self._running = False
         self._start_time: float = 0.0
@@ -70,9 +73,32 @@ class JarvisApplication:
         self._container.register_instance(ExecutionTracker, self._tracker)
         self._container.register_instance(TaskScheduler, self._scheduler)
 
+        self._register_job_system()
         self._register_handlers()
         self._event_bus.publish(SystemEvent(type=SYSTEM_STARTED, source="app"))
         self._logger.info("JARVIS initialization complete")
+
+    def _register_job_system(self) -> None:
+        from jarvis.jobs.queue import BackgroundJobQueue
+        from jarvis.jobs.service import JobService
+        from jarvis.jobs.store import JobStore
+        from jarvis.workspace.manager import WorkspaceManager
+        from jarvis.build.engine import BuildPipeline, register_build_handler
+        from jarvis.opencode.session import register_default_handler as register_opencode_handler
+
+        self._job_store = JobStore()
+        self._job_queue = BackgroundJobQueue(self._job_store, event_bus=self._event_bus, workers=2)
+        self._job_service = JobService(self._job_store, self._job_queue)
+        self._workspace_manager = WorkspaceManager(event_bus=self._event_bus)
+        self._build_pipeline = BuildPipeline(workspace_manager=self._workspace_manager, event_bus=self._event_bus)
+
+        register_build_handler(self._job_service, pipeline=self._build_pipeline)
+        register_opencode_handler(self._job_service, event_bus=self._event_bus, workspace_manager=self._workspace_manager)
+
+        self._container.register_instance(JobService, self._job_service)
+        self._container.register_instance(WorkspaceManager, self._workspace_manager)
+        self._container.register_instance(BuildPipeline, self._build_pipeline)
+        self._logger.info("Job system registered: %s kinds", len(self._job_queue._handlers))
 
     def _register_handlers(self) -> None:
         if self._engine is None:
@@ -278,7 +304,7 @@ class JarvisApplication:
         msgs.append({"role": "user", "content": text})
         try:
             from jarvis.planner.llm import _get_client
-            return _get_client().chat(model=model, messages=msgs)["message"]["content"]
+            return _get_client().chat(model=model, messages=msgs, think=False)["message"]["content"]
         except Exception as exc:
             self._logger.warning("LLM chat failed: %s", exc)
             return "I am having trouble reaching the language model, sir."
@@ -288,14 +314,32 @@ class JarvisApplication:
         self._running = False
         if self._scheduler:
             self._scheduler.cancel_all()
+        if self._job_service:
+            try:
+                self._job_service.shutdown()
+            except Exception as exc:  # noqa: BLE001
+                self._logger.warning("Job service shutdown error: %s", exc)
         self._container.shutdown()
         self._event_bus.publish(SystemEvent(type=SYSTEM_STOPPED, source="app"))
         self._logger.info("JARVIS shutdown complete")
+
+    def build_project(self, name: str, description: str = "", instruction: str = "") -> Any:
+        """Submit a background project build (workspace + spec + OpenCode).
+
+        Returns immediately with a Job; the build runs on the job queue.
+        """
+        if self._job_service is None:
+            raise RuntimeError("Job system not initialized")
+        return self._job_service.submit(
+            "build_project",
+            {"name": name, "description": description, "instruction": instruction},
+        )
 
     def health_check(self) -> Dict[str, ServiceHealth]:
         return {
             "event_bus": ServiceHealth(name="event_bus", healthy=True),
             "engine": ServiceHealth(name="engine", healthy=self._engine is not None),
+            "job_service": ServiceHealth(name="job_service", healthy=self._job_service is not None),
         }
 
     @property

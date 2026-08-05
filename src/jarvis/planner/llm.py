@@ -39,7 +39,7 @@ def llm_chat_with_retry(
 ) -> dict | None:
     """Call ollama.chat with retry, timeout, and circuit-breaker support."""
     cb = get_circuit_breaker()
-    if cb.is_open:
+    if cb.is_open():
         get_metrics().record(circuit_breaker_hits=1)
         logger.warning("LLM circuit breaker is open — skipping LLM call")
         return None
@@ -53,7 +53,7 @@ def llm_chat_with_retry(
     for attempt in range(MAX_LLM_RETRIES + 1):
         try:
             start = time.monotonic()
-            resp = _get_client().chat(model=model, messages=messages, options=options)
+            resp = _get_client().chat(model=model, messages=messages, options=options, keep_alive=-1, think=False)
             elapsed = (time.monotonic() - start) * 1000.0
             get_metrics().record_llm_call(elapsed)
             cb.record_success()
@@ -84,13 +84,35 @@ def llm_chat_with_retry(
 _JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
 
 
+def get_response_text(resp) -> str:
+    """Return the answer text, falling back to the thinking block if content is empty."""
+    if resp is None or not resp.message:
+        return ""
+    content = resp.message.content or ""
+    if content.strip():
+        return content
+    return getattr(resp.message, "thinking", "") or ""
+
+
 def extract_json(text: str) -> Optional[dict]:
-    """Pull the first JSON object out of text and parse it."""
+    """Pull a complete JSON object out of text and parse it.
+
+    Prefers the last valid JSON object found (models often wrap the answer
+    in analysis prose), then falls back to repair heuristics.
+    """
     if not text:
         return None
-    match = _JSON_OBJECT_RE.search(text)
-    candidate = match.group(0) if match else text.strip()
-    for attempt in (candidate, _light_json_repair(candidate), _aggressive_json_repair(candidate)):
+    cleaned = _strip_noise(text)
+
+    match = _JSON_OBJECT_RE.search(cleaned)
+    candidates = []
+    if match:
+        candidates.append(match.group(0))
+    candidates.extend(reversed(_all_balanced_objects(cleaned)))
+    candidates.append(_light_json_repair(cleaned))
+    candidates.append(_aggressive_json_repair(cleaned))
+
+    for attempt in candidates:
         if not attempt or not attempt.strip():
             continue
         try:
@@ -99,6 +121,43 @@ def extract_json(text: str) -> Optional[dict]:
             continue
     logger.warning("Failed to extract valid JSON from: %.200s", text)
     return None
+
+
+def _strip_noise(text: str) -> str:
+    """Remove markdown fences and model reasoning blocks before parsing."""
+    text = re.sub(r"```(?:json)?\s*([\s\S]*?)```", r"\1", text)
+    text = re.sub(r" thinking[\s\S]*? response", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\\u003cthink\\u003e[\s\S]*?\\u003c/think\\u003e", "", text)
+    return text
+
+
+def _all_balanced_objects(text: str) -> list:
+    """Return every string-aware balanced ``{...}`` span found in text."""
+    spans: list = []
+    for start in (m.start() for m in re.finditer(r"\{", text)):
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    spans.append(text[start : i + 1])
+                    break
+    return spans
 
 
 def _light_json_repair(text: str) -> str:
