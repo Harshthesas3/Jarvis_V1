@@ -9,8 +9,6 @@ import wave
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
-
 from jarvis.interfaces.speech import ASREngine, WakeWordEngine
 from jarvis.types import AudioChunk, TranscriptResult
 
@@ -32,8 +30,9 @@ _BASE_MODEL_SIZE = "base"
 # ---------------------------------------------------------------------------
 
 
-def _audio_to_float(audio: AudioChunk) -> np.ndarray:
+def _audio_to_float(audio: AudioChunk):
     """Convert AudioChunk int16 bytes to float32 numpy array."""
+    import numpy as np
     raw = np.frombuffer(audio.data, dtype=np.dtype(audio.dtype))
     return raw.astype(np.float32) / 32768.0
 
@@ -275,7 +274,7 @@ class SttEngine(ASREngine):
 # ---------------------------------------------------------------------------
 
 
-def _load_audio_from_file(path: str) -> np.ndarray:
+def _load_audio_from_file(path: str):
     """Load a WAV file and return a float32 mono array."""
     import librosa
 

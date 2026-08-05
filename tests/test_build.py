@@ -20,10 +20,11 @@ sys.exit(0)
 """
 
 
-def _write_script(text):
+def _write_script(text, dir_path=None):
     import tempfile
 
-    fd, path = tempfile.mkstemp(suffix=".py", dir=tempfile.mkdtemp())
+    parent = dir_path or tempfile.mkdtemp()
+    fd, path = tempfile.mkstemp(suffix=".py", dir=parent)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(text)
     return path
@@ -78,14 +79,22 @@ class TestBuildPipeline(unittest.TestCase):
         import tempfile
 
         self.tmp_root = tempfile.mkdtemp()
+        self.script_dir = tempfile.mkdtemp()
         self.bus = RecordingBus()
-        self.script = _write_script(FAKE_SCRIPT)
+        self.script = _write_script(FAKE_SCRIPT, dir_path=self.script_dir)
         self.pipeline = BuildPipeline(
             workspace_manager=WorkspaceManager(project_root=self.tmp_root),
             event_bus=self.bus,
             requirements_gatherer=FakeRequirementGatherer(),
             spec_generator=FakeSpecGenerator(),
         )
+
+    def tearDown(self):
+        if hasattr(self, "script") and self.script and os.path.exists(self.script):
+            try:
+                os.remove(self.script)
+            except OSError:
+                pass
 
     def test_prepare_documents(self):
         workspace = self.pipeline.workspace_manager.scaffold("DocApp", "desc")["path"]

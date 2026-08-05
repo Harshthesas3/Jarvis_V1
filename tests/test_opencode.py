@@ -41,8 +41,9 @@ class RecordingBus:
         self.events.append(event)
 
 
-def _write_script(text):
-    fd, path = tempfile.mkstemp(suffix=".py", dir=tempfile.mkdtemp())
+def _write_script(text, dir_path=None):
+    parent = dir_path or tempfile.mkdtemp()
+    fd, path = tempfile.mkstemp(suffix=".py", dir=parent)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(text)
     return path
@@ -88,16 +89,26 @@ class TestOpencodeSession(unittest.TestCase):
 class TestRunOpencodeBuild(unittest.TestCase):
     def setUp(self):
         self.tmp_root = tempfile.mkdtemp()
-        self.script = _write_script(FAKE_SCRIPT)
+        self.script_dir = tempfile.mkdtemp()
+        self.script = _write_script(FAKE_SCRIPT, dir_path=self.script_dir)
+        self.fail_script = None
         self.bus = RecordingBus()
+
+    def tearDown(self):
+        for p in (self.script, self.fail_script):
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
 
     def _reporter(self):
         calls = []
 
-        def report(progress, message=None):
-            calls.append((progress, message))
+        def rep(progress, msg=None):
+            calls.append((progress, msg))
 
-        return report, calls
+        return rep, calls
 
     def test_success_flow(self):
         job = Job(job_id="b1", kind="opencode_build", params={"name": "FakeApp", "description": "A test app"})
@@ -122,7 +133,7 @@ class TestRunOpencodeBuild(unittest.TestCase):
         self.assertEqual(job.status, JobStatus.QUEUED)
 
     def test_failure_flow(self):
-        fail_script = _write_script(FAIL_SCRIPT)
+        self.fail_script = _write_script(FAIL_SCRIPT, dir_path=self.script_dir)
         job = Job(job_id="b2", kind="opencode_build", params={"name": "BadApp"})
         report, _ = self._reporter()
         result = run_opencode_build(
@@ -131,7 +142,7 @@ class TestRunOpencodeBuild(unittest.TestCase):
             event_bus=self.bus,
             workspace_manager=WorkspaceManager(project_root=self.tmp_root),
             opencode_binary=sys.executable,
-            opencode_args=[fail_script],
+            opencode_args=[self.fail_script],
         )
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["exit_code"], 3)
