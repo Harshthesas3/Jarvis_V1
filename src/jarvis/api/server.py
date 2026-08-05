@@ -19,7 +19,7 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import logging
 from fastapi import Depends, FastAPI, HTTPException
@@ -28,7 +28,8 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from jarvis.app import JarvisApplication
+if TYPE_CHECKING:
+    from jarvis.app import JarvisApplication
 from jarvis.api.dependencies import get_app, set_app
 
 logger = logging.getLogger("jarvis.api.server")
@@ -400,7 +401,7 @@ def create_app(app_instance: JarvisApplication) -> FastAPI:
     return api_app
 
 
-def run_server(app_instance: JarvisApplication, host: str = "127.0.0.1", port: int = 8000):
+def run_server(app_instance: "JarvisApplication", host: str = "127.0.0.1", port: int = 8000):
     """Run the FastAPI app with Uvicorn."""
     import uvicorn
 

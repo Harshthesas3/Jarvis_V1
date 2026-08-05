@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import os
+import queue as _queue
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 # StartupManager is imported lazily inside initialize() to keep import time short.
 
@@ -214,6 +215,7 @@ class JarvisApplication:
                     "Could not load distil model (%s), falling back to 'base': %s",
                     cmd_model_size, exc,
                 )
+                wake_model = WhisperModel("base", device="cpu", compute_type="int8")
                 cmd_model = WhisperModel("base", device="cpu", compute_type="int8")
         else:
             self._logger.info("ASR models ready (pre-warmed). No cold start.")
@@ -232,7 +234,7 @@ class JarvisApplication:
                 while self._running:
                     tel.start_turn()
                     tel.start_stage("wake")
-                    rec = sd.rec(int(2 * fs), samplerate=fs, channels=1, dtype="int16")
+                    rec = sd.rec(2 * fs, samplerate=fs, channels=1, dtype="int16")
                     sd.wait()
                     write_wav("wake.wav", fs, rec)
                     segs, _ = wake_model.transcribe("wake.wav", language="en")
@@ -326,7 +328,7 @@ class JarvisApplication:
             vol = float(np.linalg.norm(indata) / np.sqrt(len(indata)))
             try:
                 q.put_nowait((vol, indata.copy()))
-            except _queue.QueueFull:
+            except _queue.Full:
                 pass
 
         with sd.InputStream(samplerate=fs, channels=1, dtype="float32", callback=_cb, blocksize=chunk_frames):
