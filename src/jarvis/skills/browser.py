@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from jarvis.skills.interfaces import SkillInterface
+
+if TYPE_CHECKING:
+    from jarvis.skills.browsers.chrome_client import ChromeClient
 
 logger = logging.getLogger("jarvis.skills.browser")
 
