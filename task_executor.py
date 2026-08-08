@@ -21,7 +21,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
 import context_store as _cs
-from planner import register_tool
+from jarvis.planner import register_tool
 
 logger = logging.getLogger("jarvis.executor")
 
@@ -56,7 +56,7 @@ def _capture_screen(folder: str = "Screenshots") -> Optional[str]:
 # ---------------------------------------------------------------------------
 def _handle_open_app(plan: dict, ctx: ExecutorContext) -> str:
     """Open an application with verification using app_launcher."""
-    from app_launcher import app_launcher
+    from jarvis.automation.smart_launcher import app_launcher
     
     apps = ctx.get("apps", [])
     raw = (plan.get("app") or "").strip().lower().replace(".", "")
@@ -235,7 +235,8 @@ def _handle_reminder(plan: dict, ctx: ExecutorContext) -> str:
             return "Reminder deleted, sir."
         return "I could not find that reminder, sir."
     # default: add
-    result = add_reminder(plan.get("time", ""), plan.get("task", ""))
+    recurrence_seconds = plan.get("recurrence_seconds")
+    result = add_reminder(plan.get("time", ""), plan.get("task", ""), recurrence_seconds)
     if not result.get("ok"):
         return f"Reminder failed, sir. {result.get('error', '')}"
     return f"Reminder created, sir. {plan.get('task')} at {result['human_time']}."
@@ -407,7 +408,7 @@ def _handle_screen_awareness(plan: dict, ctx: ExecutorContext) -> str:
         return "Failed to capture screenshot, sir."
 
     try:
-        from planner import _get_ollama_client
+        from jarvis.planner import _get_ollama_client
         resp = _get_ollama_client().chat(
             model="qwen2.5vl:3b",
             messages=[{
@@ -591,6 +592,11 @@ def _handle_ai_chat(plan: dict, ctx: ExecutorContext) -> str:
     return "I am ready, sir."
 
 
+def _handle_identity_response(plan: dict, ctx: ExecutorContext) -> str:
+    """Return a pre-composed identity response verbatim (no LLM involved)."""
+    return (plan.get("text") or "").strip() or "I am JARVIS, sir."
+
+
 # ---------------------------------------------------------------------------
 # UPDATED: Production-grade search handlers using prioritized_search_agent
 # ---------------------------------------------------------------------------
@@ -626,7 +632,7 @@ def _handle_search_in_app(plan: dict, ctx: ExecutorContext) -> str:
                 return result.message
         
         # If active window search failed or no active window, try to find app window
-        from app_launcher import app_launcher
+        from jarvis.automation.smart_launcher import app_launcher
         
         # Check if app is running
         window_info = wm.find_window_for_app(app)
@@ -680,7 +686,7 @@ def _handle_search_in_app_v2(plan: dict, ctx: ExecutorContext) -> str:
         
         if not window_info:
             # App not running, launch it using app_launcher
-            from app_launcher import app_launcher
+            from jarvis.automation.smart_launcher import app_launcher
             launch_result = app_launcher.launch_and_verify(app, wait_for_ui=True)
             
             if launch_result.status.value != "success":
@@ -1083,6 +1089,7 @@ HANDLERS: Dict[str, Callable[[dict, ExecutorContext], str]] = {
     "diagnostics": _handle_diagnostics,
     "open_folder": _handle_open_folder,
     "ai_chat": _handle_ai_chat,
+    "identity_response": _handle_identity_response,
 }
 
 
@@ -1205,7 +1212,7 @@ _POLISH_DOT_WORD_RE = re.compile(r"\.(\w)")
 
 
 def execute_plan(plan: dict) -> str:
-    from planner import _dispatch as _planner_dispatch
+    from jarvis.planner import _dispatch as _planner_dispatch
 
     t0 = time.perf_counter()
     _EXEC_METRICS["total_calls"] += 1

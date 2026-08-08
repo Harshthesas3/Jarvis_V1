@@ -22,7 +22,7 @@ _DEFAULT_WAKE_PHRASES = ["jarvis", "hey jarvis"]
 _TINY_MODEL_SIZE = "tiny"
 # distil-small.en is ~3x faster than base on CPU with equal English accuracy.
 # Falls back to "base" automatically if the distil model is not cached.
-_DISTIL_COMMAND_MODEL = "distil-whisper/distil-small.en"
+_DISTIL_COMMAND_MODEL = "Systran/faster-distil-whisper-small.en"
 _BASE_MODEL_SIZE = "base"
 
 # ---------------------------------------------------------------------------
@@ -276,7 +276,10 @@ class SttEngine(ASREngine):
 
 def _load_audio_from_file(path: str):
     """Load a WAV file and return a float32 mono array."""
-    import librosa
+    import numpy as np
+    import soundfile as sf
 
-    audio_array, _ = librosa.load(path, sr=16000, mono=True)
+    audio_array, _ = sf.read(path, dtype="float32")
+    if audio_array.ndim > 1:
+        audio_array = np.mean(audio_array, axis=1)
     return audio_array

@@ -1,4 +1,4 @@
-"""AppLauncher implementation wrapping the existing app_launcher.py module.
+"""AppLauncher implementation using the in-package smart launcher.
 
 Implements the AppLauncher interface from jarvis.interfaces.automation.
 """
@@ -12,40 +12,23 @@ from jarvis.interfaces.automation import AppLauncher as AppLauncherInterface
 
 logger = logging.getLogger("jarvis.automation.app_launcher")
 
-# Lazy import of the heavy smart-launcher module
-_smart_launcher: Any = None
+from jarvis.automation.smart_launcher import get_smart_launcher
 
 
 def _get_launcher():
-    """Lazily import and return the SmartAppLauncher singleton."""
-    global _smart_launcher
-    if _smart_launcher is None:
-        try:
-            import sys
-            import os
-
-            # Ensure the project root is on sys.path so app_launcher.py can be
-            # imported even when the package is run from elsewhere.
-            root = os.path.abspath(
-                os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
-            )
-            if root not in sys.path:
-                sys.path.insert(0, root)
-
-            from app_launcher import get_smart_launcher  # type: ignore[import-untyped]
-
-            _smart_launcher = get_smart_launcher()
-        except ImportError as exc:
-            logger.warning("Could not load smart app launcher: %s", exc)
-    return _smart_launcher
+    """Return the SmartAppLauncher singleton."""
+    try:
+        return get_smart_launcher()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not load smart app launcher: %s", exc)
+        return None
 
 
 class AppLauncher(AppLauncherInterface):
     """Launches, discovers, and verifies applications on Windows.
 
-    Delegates to the existing ``SmartAppLauncher`` from ``app_launcher.py``
-    for discovery and fuzzy matching, and adapts the returned ``LaunchResult``
-    into the interface-defined return types.
+    Delegates to :class:`jarvis.automation.smart_launcher.SmartAppLauncher`
+    for discovery and fuzzy matching.
     """
 
     def launch(self, app_name: str) -> bool:

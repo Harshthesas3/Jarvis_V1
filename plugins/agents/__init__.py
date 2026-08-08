@@ -381,7 +381,7 @@ class PlannerAgent(Agent):
             
             try:
                 # Process the task using the original planner logic
-                from planner import plan_action
+                from jarvis.planner import plan_action
                 payload = task.get("payload", {})
                 user_text = payload.get("text", "") if isinstance(payload, dict) else str(payload)
                 result = plan_action(user_text, use_llm=True)

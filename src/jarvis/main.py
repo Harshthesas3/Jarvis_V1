@@ -43,7 +43,7 @@ def main() -> None:
 
     from jarvis.app import JarvisApplication
     from jarvis.execution.adapter import set_executor_context
-    from memory_v2 import get_memory
+    from jarvis.memory.manager import get_memory_manager
 
     app = JarvisApplication(config_path=args.config)
 
@@ -61,7 +61,7 @@ def main() -> None:
         "speak": lambda t: logging.getLogger("jarvis").info("SAY: %s", t),
         "apps": _load_apps(),
         "chat": app.chat_with_llm,
-        "memory": get_memory(),
+        "memory": get_memory_manager().json_store,
         "settings": None,
     })
 
@@ -76,7 +76,7 @@ def main() -> None:
 
     if args.api:
         import webbrowser
-        print(f"\n🚀 Starting JARVIS Server at http://127.0.0.1:{args.port} ...")
+        print(f"[*] Starting JARVIS Server at http://127.0.0.1:{args.port} ...")
         webbrowser.open(f"http://127.0.0.1:{args.port}")
         app.run_api_server(port=args.port)
         return
@@ -90,8 +90,8 @@ def main() -> None:
     print(f"\n============================================================")
     print(f"       JARVIS OS 3.0 — Interactive Web & CLI Console        ")
     print(f"============================================================")
-    print(f"🌐 Launching Web UI at: {url}")
-    print(f"💻 Interactive CLI active below. Type 'exit' to quit.\n")
+    print(f"[*] Launching Web UI at: {url}")
+    print(f"[*] Interactive CLI active below. Type 'exit' to quit.\n")
 
     def _start_server():
         app.run_api_server(port=port)

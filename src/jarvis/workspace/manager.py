@@ -93,7 +93,7 @@ class WorkspaceManager:
         path = self.resolve(name)
         with self._lock:
             os.makedirs(path, exist_ok=True)
-            os.makedirs(os.path.join(path, "source"), exist_ok=True)
+            os.makedirs(os.path.join(path, "Source"), exist_ok=True)
 
             self._write_if_missing(os.path.join(path, "README.md"), README_TEMPLATE.format(name=name, description=description))
             self._write_if_missing(os.path.join(path, "requirements.md"), REQUIREMENTS_TEMPLATE.format(name=name, description=description))

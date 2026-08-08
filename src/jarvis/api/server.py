@@ -403,11 +403,16 @@ def create_app(app_instance: JarvisApplication) -> FastAPI:
 
 def run_server(app_instance: "JarvisApplication", host: str = "127.0.0.1", port: int = 8000):
     """Run the FastAPI app with Uvicorn."""
+    import threading
     import uvicorn
 
-    uvicorn.run(
+    config = uvicorn.Config(
         create_app(app_instance),
         host=host,
         port=port,
         log_level="info",
     )
+    if threading.current_thread() is not threading.main_thread():
+        config.install_signal_handlers = False
+    server = uvicorn.Server(config)
+    server.run()

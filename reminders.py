@@ -5,7 +5,9 @@ Persistent reminder engine for JARVIS.
 
 Public API:
     ReminderEngine  -- class. Singleton via get_engine().
-    add_reminder(time_str, task) -> dict
+    add_reminder(time_str, task, recurrence_seconds=None) -> dict
+        Add a reminder. If recurrence_seconds is provided, the reminder will
+        repeat every recurrence_seconds seconds.
     remove_reminder(index) -> bool
     list_reminders() -> list[dict]
     clear_reminders() -> int   (returns count cleared)
@@ -50,6 +52,7 @@ class Reminder:
     when_iso: str  # absolute ISO 8601 datetime
     created_iso: str
     completed: bool = False
+    recurrence_seconds: Optional[int] = None  # None for one‑off, else seconds between repeats
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -62,6 +65,7 @@ class Reminder:
             when_iso=str(d.get("when_iso", "")),
             created_iso=str(d.get("created_iso", "")),
             completed=bool(d.get("completed", False)),
+            recurrence_seconds=int(d.get("recurrence_seconds")) if d.get("recurrence_seconds") is not None else None,
         )
 
     @property
@@ -139,15 +143,20 @@ def parse_when(text: str, *, now: Optional[datetime] = None) -> Optional[datetim
     for word, value in number_words.items():
         s = s.replace(word, str(value))
 
-    # in N minutes / hours
+    # in N minutes / hours / seconds
     m = re.search(
-        r"in\s+(\d+)\s+(minute|minutes|min|hour|hours|hr|hrs)",
+        r"in\s+(\d+)\s+(minute|minutes|min|hour|hours|hr|hrs|second|seconds|sec|secs)",
         s
     )
     if m:
         n = int(m.group(1))
         unit = m.group(2)
-        delta = timedelta(hours=n) if "hour" in unit or "hr" in unit else timedelta(minutes=n)
+        if "hour" in unit or "hr" in unit:
+            delta = timedelta(hours=n)
+        elif "second" in unit or "sec" in unit:
+            delta = timedelta(seconds=n)
+        else:  # minute/minutes/min
+            delta = timedelta(minutes=n)
         return now + delta
 
     base_date: Optional[datetime] = None
@@ -216,7 +225,9 @@ class ReminderEngine:
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to save reminders: %s", exc)
 
-    def add_reminder(self, time_str: str, task: str) -> dict:
+    def add_reminder(self, time_str: str, task: str, recurrence_seconds: Optional[int] = None) -> dict:
+        """Add a reminder. If recurrence_seconds is provided, the reminder will repeat every recurrence_seconds seconds.
+        Returns a dict with keys: ok, reminder (if ok), human_time (if ok), error (if not ok)."""
         when = parse_when(time_str)
         if when is None:
             return {"ok": False, "error": f"Could not understand time '{time_str}'."}
@@ -226,6 +237,8 @@ class ReminderEngine:
             task=task.strip(),
             when_iso=when.isoformat(timespec="seconds"),
             created_iso=datetime.now().isoformat(timespec="seconds"),
+            completed=False,
+            recurrence_seconds=recurrence_seconds,
         )
         with self._lock:
             self._reminders.append(rem)
@@ -292,8 +305,12 @@ class ReminderEngine:
                 if r.completed:
                     continue
                 if r.when <= now + timedelta(seconds=GRACE_SEC):
-                    r.completed = True
                     fired.append(i)
+                    if r.recurrence_seconds is not None:
+                        # Reschedule for next occurrence
+                        r.when_iso = (r.when + timedelta(seconds=r.recurrence_seconds)).isoformat(timespec="seconds")
+                    else:
+                        r.completed = True
             if fired:
                 self._save()
         for i in fired:
@@ -307,6 +324,8 @@ class ReminderEngine:
                     self._speak_fn(msg)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Speak failed for reminder: %s", exc)
+        # Remove completed reminders
+        self._reminders = [rem for rem in self._reminders if not rem.completed]
 
 
 # ---------------------------------------------------------------------------
@@ -322,8 +341,8 @@ def get_engine() -> ReminderEngine:
     return _engine
 
 
-def add_reminder(time_str: str, task: str) -> dict:
-    return get_engine().add_reminder(time_str, task)
+def add_reminder(time_str: str, task: str, recurrence_seconds: Optional[int] = None) -> dict:
+    return get_engine().add_reminder(time_str, task, recurrence_seconds)
 
 
 def remove_reminder(index: int) -> bool:

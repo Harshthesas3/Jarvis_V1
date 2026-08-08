@@ -1,4 +1,4 @@
-"""
+﻿"""
 app_launcher.py
 Production-grade application launcher that can open ANY app on Windows.
 """
@@ -317,7 +317,7 @@ class SmartAppLauncher:
         
         try:
             if launch_method == "uwp":
-                # UWP app — use explorer.exe with shell:AppsFolder (no shell=True)
+                # UWP app ΓÇö use explorer.exe with shell:AppsFolder (no shell=True)
                 app_id = app_info.get("appid")
                 if app_id:
                     import threading
@@ -401,19 +401,18 @@ class SmartAppLauncher:
     
     def _wait_for_window(self, app_name: str, timeout: float) -> Optional[Dict[str, Any]]:
         """Wait for app window to appear."""
-        from ui_core import WindowManager, _get_process_name
-        
+        from jarvis.automation.window import WindowManager
+
         wm = WindowManager()
         start_time = time.time()
-        
+
         while time.time() - start_time < timeout:
-            # Look for windows with app name in title
-            for window in wm.find_windows():
+            for window in wm.enum_windows():
                 if window.title and app_name.lower() in window.title.lower():
                     return {
-                        'hwnd': window.hwnd,
-                        'title': window.title,
-                        'class': window.class_name
+                        "hwnd": window.hwnd,
+                        "title": window.title,
+                        "class": window.class_name,
                     }
             time.sleep(0.5)
         
@@ -431,12 +430,12 @@ def get_smart_launcher() -> SmartAppLauncher:
     return _smart_launcher
 
 
-# Legacy compatibility
-class AppLauncher:
+class LegacyAppLauncherFacade:
+    """Backward-compatible facade used by task_executor and legacy handlers."""
+
     @staticmethod
     def launch_and_verify(app_name: str, wait_for_ui: bool = True) -> LaunchResult:
-        """Legacy compatibility method."""
         return get_smart_launcher().launch_app(app_name)
 
 
-app_launcher = AppLauncher()
+app_launcher = LegacyAppLauncherFacade()

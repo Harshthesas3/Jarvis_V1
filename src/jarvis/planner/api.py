@@ -88,6 +88,18 @@ def plan_action(user_text: str, *, use_llm: bool = True) -> dict:
     except ImportError:
         pass
 
+    # Deterministic creator-identity interception: answers come from trusted
+    # application code (jarvis.services.identity), never from the LLM, so the
+    # identity cannot be hallucinated or redefined by user prompts.
+    try:
+        from jarvis.services.identity import get_identity_manager
+        identity_response = get_identity_manager().match_query(text)
+    except Exception:  # noqa: BLE001 - never break planning over identity
+        identity_response = None
+    if identity_response:
+        logger.info("Identity query intercepted: %s", text[:100])
+        return {"action": "identity_response", "text": identity_response}
+
     # Check for incomplete commands (clarification handler)
     clarification = needs_clarification(text)
     if clarification is not None:

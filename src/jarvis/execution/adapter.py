@@ -63,7 +63,7 @@ def get_executor_context() -> dict:
 # Plan bridge
 def quick_plan(text: str) -> Optional[dict]:
     try:
-        from planner import plan_action  # root-level legacy module (path patched at import)
+        from jarvis.planner import plan_action
         return plan_action(text)
     except Exception as exc:
         logger.warning("quick_plan failed: %s", exc)
@@ -100,7 +100,7 @@ def _plan_to_graph(plan: dict) -> Optional[ExecutionGraph]:
 
 def _fallback_execute(plan: dict) -> str:
     try:
-        from planner import _dispatch  # root-level legacy module (path patched at import)
+        from jarvis.planner import _dispatch
         return _dispatch(plan)
     except Exception as exc:
         return f"Execution failed: {exc}"
@@ -108,7 +108,7 @@ def _fallback_execute(plan: dict) -> str:
 
 # Handler implementations
 def _handle_open_app(task: TaskNode, context: dict) -> str:
-    from app_launcher import app_launcher
+    from jarvis.automation.smart_launcher import app_launcher
     apps = _EXECUTOR_CONTEXT.get("apps", [])
     raw = (task.params.get("app") or "").strip().lower().replace(".", "")
     if not raw:
@@ -203,7 +203,8 @@ def _handle_reminder(task: TaskNode, context: dict) -> str:
         return f"Cleared {clear_reminders()} reminders, sir."
     if op == "remove":
         return "Reminder deleted, sir." if remove_reminder(int(task.params.get("index", 0)) - 1) else "Reminder not found, sir."
-    r = add_reminder(task.params.get("time", ""), task.params.get("task", ""))
+    recurrence_seconds = task.params.get("recurrence_seconds")
+    r = add_reminder(task.params.get("time", ""), task.params.get("task", ""), recurrence_seconds)
     return f"Reminder set for {r.get('human_time', '?')}, sir."
 
 
@@ -297,6 +298,11 @@ def _handle_ai_chat(task: TaskNode, context: dict) -> str:
     chat = _EXECUTOR_CONTEXT.get("chat")
     t = task.params.get("text", "")
     return chat(t) if chat and t else "Ready."
+
+
+def _handle_identity_response(task: TaskNode, context: dict) -> str:
+    """Return a pre-composed identity response verbatim (no LLM involved)."""
+    return (task.params.get("text") or "").strip() or "I am JARVIS, sir."
 
 
 def _handle_browser_open(task: TaskNode, context: dict) -> str:
@@ -453,7 +459,8 @@ ADAPTER_ACTIONS: Dict[str, Callable[[TaskNode, dict], str]] = {
     "volume_control": _handle_volume_control, "system_control": _handle_system_control,
     "pc_control": _handle_pc_control,
     "memory_store": _handle_memory_store, "memory_recall": _handle_memory_recall, "memory_clear": _handle_memory_clear,
-    "ai_chat": _handle_ai_chat, "browser_open": _handle_browser_open, "browser_search": _handle_browser_search,
+    "ai_chat": _handle_ai_chat, "identity_response": _handle_identity_response,
+    "browser_open": _handle_browser_open, "browser_search": _handle_browser_search,
     "click": _handle_click, "double_click": _handle_double_click, "right_click": _handle_right_click,
     "type_text": _handle_type_text, "press_key": _handle_press_key, "scroll": _handle_scroll,
     "music": _handle_music, "run_terminal_command": _handle_terminal, "screen_awareness": _handle_screen,

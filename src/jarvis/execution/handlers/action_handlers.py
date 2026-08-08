@@ -16,7 +16,7 @@ class OpenAppHandler(TaskHandler):
         return "open_app"
 
     def execute(self, task: TaskNode, context: dict) -> str:
-        from app_launcher import app_launcher
+        from jarvis.automation.smart_launcher import app_launcher
         import logging, os, re, subprocess
         logger = logging.getLogger("jarvis.execution.handlers")
         apps = context.get("apps", [])
@@ -740,7 +740,7 @@ class RunProgramHandler(TaskHandler):
         return "run_program"
 
     def execute(self, task: TaskNode, context: dict) -> str:
-        from app_launcher import app_launcher
+        from jarvis.automation.smart_launcher import app_launcher
         import logging, os, re, subprocess
         logger = logging.getLogger("jarvis.execution.handlers")
         apps = context.get("apps", [])

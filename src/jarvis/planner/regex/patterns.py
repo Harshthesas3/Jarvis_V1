@@ -539,10 +539,9 @@ _add_trigger(
 )
 
 # Persona & Identity Triggers 
-_add_trigger(
-    r"^(?:who\s+is\s+your\s+(?:father|creator|developer|maker|builder|author)|who\s+(?:created|built|made|developed)\s+you)\??$",
-    lambda m, src: {"action": "ai_chat", "text": "T Harshith Krishna Sastry. Most people write software. He chose to build an intelligence."},
-)
+# NOTE: creator queries ("who created you", "who made you", etc.) are
+# intercepted deterministically in planner.api.plan_action via
+# jarvis.services.identity — do not add duplicate creator triggers here.
 _add_trigger(
     r"^(?:are\s+you\s+chatgpt|is\s+this\s+chatgpt|are\s+you\s+gpt)\??$",
     lambda m, src: {"action": "ai_chat", "text": "No. ChatGPT is a model. I'm Jarvis. The difference becomes obvious once you start using me."},

@@ -121,7 +121,7 @@ class FastCommandRouter:
 
     def _launch_app(self, app_name: str) -> str:
         try:
-            from app_launcher import get_smart_launcher
+            from jarvis.automation.smart_launcher import get_smart_launcher
             result = get_smart_launcher().launch_app(app_name)
             return result.message
         except Exception as e:

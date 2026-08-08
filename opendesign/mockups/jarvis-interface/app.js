@@ -4,7 +4,7 @@
    Voice is DEFAULT — no Voice Mode toggle needed
    ═══════════════════════════════════════════════════ */
 
-const API = '';
+const API = (window.location.protocol.startsWith('http') && window.location.port === '8000') ? '' : 'http://127.0.0.1:8000';
 const state = { status: 'online', history: [], metrics: {} };
 
 // ─────────────────────────────────────────────

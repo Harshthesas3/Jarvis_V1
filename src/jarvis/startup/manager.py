@@ -97,7 +97,7 @@ class StartupManager:
 
         # Read config values once (thread-safe — ConfigService is read-only)
         wake_model_size = cfg.get("models.stt_wake_model", "tiny")
-        cmd_model_size = cfg.get("models.stt_command_model", "distil-whisper/distil-small.en")
+        cmd_model_size = cfg.get("models.stt_command_model", "Systran/faster-distil-whisper-small.en")
         chat_model = cfg.get("models.chat_model", "qwen3.5:4b")
         voice_model = cfg.get("paths.voice_model", "")
         opencode_bin = os.environ.get("OPENCODE_BIN", "opencode")

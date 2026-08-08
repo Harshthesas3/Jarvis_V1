@@ -26,7 +26,7 @@ class TestWorkspaceManager(unittest.TestCase):
         self.assertTrue(self.manager.exists("Spotify"))
         for filename in ("README.md", "requirements.md", "spec.md", "progress.json"):
             self.assertTrue(os.path.exists(os.path.join(path, filename)), filename)
-        self.assertTrue(os.path.isdir(os.path.join(path, "source")))
+        self.assertTrue(os.path.isdir(os.path.join(path, "Source")))
         progress = self.manager.read_progress(path)
         self.assertEqual(progress["status"], "building")
         self.assertEqual(progress["progress"], 5.0)

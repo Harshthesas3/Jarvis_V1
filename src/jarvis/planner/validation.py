@@ -67,6 +67,7 @@ _ACTION_REQUIRED_PARAMS: dict[str, list[str]] = {
     "wait_for_window": ["title"],
     "wait_for_element": ["selector"],
     "ai_chat": ["text"],
+    "identity_response": ["text"],
     "open_folder": ["path"],
     "clarification": ["question"],
 }

@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import threading
 import time
 from jarvis.interfaces.events import EventSubscriber, SystemEvent, EventPriority
 
@@ -17,6 +18,7 @@ class TelemetrySubscriber(EventSubscriber):
     def __init__(self, output_path: str | None = None) -> None:
         self._path = output_path or _DEFAULT_EVENT_LOG
         os.makedirs(os.path.dirname(self._path), exist_ok=True)
+        self._lock = threading.RLock()
 
     def handle_event(self, event: SystemEvent) -> None:
         rec = {
@@ -27,8 +29,9 @@ class TelemetrySubscriber(EventSubscriber):
             "data": event.data,
         }
         try:
-            with open(self._path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            with self._lock:
+                with open(self._path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except OSError as exc:
             logger.warning("Could not write event log: %s", exc)
 

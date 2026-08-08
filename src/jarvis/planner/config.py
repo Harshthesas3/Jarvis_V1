@@ -133,5 +133,6 @@ SUPPORTED_ACTIONS: FrozenSet[str] = frozenset({
     "wait_for_window",
     "wait_for_element",
     "ai_chat",
+    "identity_response",
     "open_folder",
 })

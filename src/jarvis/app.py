@@ -8,6 +8,8 @@ import queue as _queue
 import time
 from typing import Any, Dict, Optional, cast
 
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+
 # StartupManager is imported lazily inside initialize() to keep import time short.
 
 from jarvis.di.container import ServiceContainer
@@ -29,6 +31,7 @@ from jarvis.execution.scheduler import TaskScheduler
 from jarvis.interfaces.events import SystemEvent, EventPriority
 from jarvis.types import ServiceHealth
 from jarvis.telemetry import LatencyCollector
+from jarvis.memory.manager import MemoryManager, initialize_memory_manager
 from jarvis.memory.project_state import ProjectStateMemory
 
 logger = logging.getLogger("jarvis.app")
@@ -51,6 +54,7 @@ class JarvisApplication:
         self._build_pipeline: Optional[Any] = None
         self._config_path = config_path
         self._running = False
+        self._initialized = False
         self._start_time: float = 0.0
         self._fast_router = None
         # Pre-warmed components populated by StartupManager during initialize()
@@ -73,6 +77,9 @@ class JarvisApplication:
         self._container.register_instance(DynamicResponseEngine, DynamicResponseEngine())
 
     def initialize(self) -> None:
+        if self._initialized:
+            return
+        self._initialized = True
         self._start_time = time.time()
         self._event_bus.publish(SystemEvent(type=SYSTEM_STARTING, source="app"))
         self._logger = logging.getLogger("jarvis.app")
@@ -119,8 +126,14 @@ class JarvisApplication:
             workspace_manager=self._workspace_manager,
         )
 
-        # Phase 12: latency telemetry singleton
+        # Phase 12: Initialize memory manager
+        self._memory_manager = initialize_memory_manager()
+
+        # Phase 13: latency telemetry singleton
         self._telemetry = LatencyCollector.instance()
+
+        # Register memory manager in DI container
+        self._container.register_instance(MemoryManager, self._memory_manager)
 
         # Wire event subscribers
         from jarvis.eventbus.subscribers import TelemetrySubscriber, SystemLogSubscriber
@@ -202,7 +215,7 @@ class JarvisApplication:
         if wake_model is None or cmd_model is None:
             from faster_whisper import WhisperModel
             wake_model_size = cfg.get("models.stt_wake_model", "tiny")
-            cmd_model_size = cfg.get("models.stt_command_model", "distil-whisper/distil-small.en")
+            cmd_model_size = cfg.get("models.stt_command_model", "Systran/faster-distil-whisper-small.en")
             self._logger.info(
                 "Pre-warm missed — loading ASR models now (cold): wake=%s cmd=%s",
                 wake_model_size, cmd_model_size,
@@ -418,6 +431,7 @@ class JarvisApplication:
         self.initialize()
         self._running = True
         try:
+            # pyrefly: ignore [bad-argument-type]
             run_server(self, host=host, port=port)
         except KeyboardInterrupt:
             self._logger.info("API server interrupted")
